@@ -1,70 +1,122 @@
-# Getting Started with Create React App
+# Sequence Game - Timed Edition
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A fun and challenging word sequence game built with React and Tailwind CSS. Players must remember and repeat sequences of letters within a time limit, with increasing difficulty levels.
 
-## Available Scripts
+## 🎮 Game Features
 
-In the project directory, you can run:
+- **Timed Challenges**: Race against the clock to complete sequences
+- **Progressive Difficulty**: Sequences get longer and more complex
+- **Responsive Design**: Works perfectly on desktop and mobile devices
+- **Beautiful UI**: Modern interface built with Tailwind CSS
+- **FontAwesome Icons**: Professional iconography throughout the game
 
-### `npm start`
+## 🚀 Live Demo
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+Play the game online: [https://davisenglish.github.io/sequence-game-timed](https://davisenglish.github.io/sequence-game-timed)
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## 🛠️ Technology Stack
 
-### `npm test`
+- **React 19.1.0** - Modern React with latest features
+- **Tailwind CSS 3.4.3** - Utility-first CSS framework
+- **FontAwesome** - Professional icon library
+- **PostCSS** - CSS processing and optimization
+- **GitHub Pages** - Free hosting and deployment
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## 📦 Installation & Setup
 
-### `npm run build`
+### Prerequisites
+- Node.js (version 16 or higher)
+- npm or yarn
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+### Local Development
+```bash
+# Clone the repository
+git clone git@github.com:davisenglish/sequence-game-timed.git
+cd sequence-game-timed
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+# Install dependencies
+npm install
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+# Start development server
+npm start
+```
 
-### `npm run eject`
+The app will open in your browser at `http://localhost:3000`
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+## 🚀 Deployment
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+### Automatic Deployment
+```bash
+# Deploy to GitHub Pages
+npm run deploy
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+# Or use the convenience script
+./deploy.sh
+```
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+### Manual Deployment
+1. Build the project: `npm run build`
+2. Deploy to GitHub Pages: `npm run deploy`
 
-## Learn More
+## 📁 Project Structure
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+```
+sequence-game-timed/
+├── public/                 # Static assets and HTML template
+├── src/                    # React source code
+│   ├── App.js            # Main application component
+│   ├── App.css           # Application styles
+│   └── index.js          # Application entry point
+├── package.json           # Dependencies and scripts
+├── tailwind.config.js     # Tailwind CSS configuration
+├── postcss.config.js      # PostCSS configuration
+└── deploy.sh             # Deployment convenience script
+```
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+## 🎯 How to Play
 
-### Code Splitting
+1. **Start the Game**: Click the start button to begin
+2. **Watch the Sequence**: Pay attention to the letters that appear
+3. **Repeat the Sequence**: Click the letters in the same order
+4. **Beat the Clock**: Complete sequences before time runs out
+5. **Level Up**: Successfully complete sequences to advance
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+## 🔧 Available Scripts
 
-### Analyzing the Bundle Size
+- `npm start` - Start development server
+- `npm run build` - Build for production
+- `npm run test` - Run test suite
+- `npm run deploy` - Deploy to GitHub Pages
+- `./deploy.sh` - Convenience deployment script
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+## 🌐 GitHub Pages Configuration
 
-### Making a Progressive Web App
+The app is configured to work with GitHub Pages at the path `/sequence-game-timed/`. The `homepage` field in `package.json` ensures all assets are properly referenced.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+## 📱 Responsive Design
 
-### Advanced Configuration
+The game is fully responsive and works on:
+- Desktop computers
+- Tablets
+- Mobile phones
+- All modern browsers
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+## 🤝 Contributing
 
-### Deployment
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+## 📄 License
 
-### `npm run build` fails to minify
+This project is open source and available under the [MIT License](LICENSE).
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+## 👨‍💻 Author
+
+**Davis English** - [GitHub Profile](https://github.com/davisenglish)
+
+---
+
+**Enjoy playing the Sequence Game! 🎉**
