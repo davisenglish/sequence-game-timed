@@ -1,6 +1,9 @@
 // Required dependencies: react, @fortawesome/react-fontawesome, @fortawesome/free-solid-svg-icons
 // Tailwind CSS is used for styling (optional, or replace with your own CSS)
 // Drop this file into your React project and import/use <WordPuzzleGame />
+// 
+// VERSION: TIMED EDITION - Uses isolated localStorage keys to prevent stats conflicts with other versions
+// Storage Keys: 'sequenceGameTimedStats' and 'currentRoundTimeTimed'
 import React, { useState, useEffect, useRef } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faStopwatch, faCircleInfo, faChartSimple, faCheckCircle, faTimesCircle, faCircleQuestion, faHouseChimney } from '@fortawesome/free-solid-svg-icons';
@@ -239,8 +242,8 @@ export default function WordPuzzleGame() {
       setAllLevelLetters(allLetters);
       setLetters(allLetters[0]); // Set first level letters
     })();
-    // Load stats from localStorage
-    const savedStats = localStorage.getItem('sequenceGameStats');
+      // Load stats from localStorage - Version specific for Timed Edition
+  const savedStats = localStorage.getItem('sequenceGameTimedStats');
     if (savedStats) {
       setStats(JSON.parse(savedStats));
     }
@@ -358,7 +361,7 @@ export default function WordPuzzleGame() {
 
   const resetGame = () => {
     // Clear the current round time when starting a new game
-    localStorage.removeItem('currentRoundTime');
+    localStorage.removeItem('currentRoundTimeTimed');
     
     setRoundStarted(false);
     setShowRevealAnimation(false);
@@ -416,12 +419,12 @@ export default function WordPuzzleGame() {
       newStats.fastestTimes.sort((a, b) => a - b); // Sort ascending
       newStats.fastestTimes = newStats.fastestTimes.slice(0, 5); // Keep top 5
       
-      // Store the current round's time for highlighting
-      localStorage.setItem('currentRoundTime', gameTime.toString());
+      // Store the current round's time for highlighting - Version specific
+      localStorage.setItem('currentRoundTimeTimed', gameTime.toString());
     }
     
     setStats(newStats);
-    localStorage.setItem('sequenceGameStats', JSON.stringify(newStats));
+    localStorage.setItem('sequenceGameTimedStats', JSON.stringify(newStats));
   };
 
   const handleInputChange = (e) => {
@@ -432,7 +435,7 @@ export default function WordPuzzleGame() {
 
   const clearStats = () => {
     // Clear all statistical data
-    localStorage.removeItem('sequenceGameStats');
+    localStorage.removeItem('sequenceGameTimedStats');
     
     // Reset stats to initial state
     setStats({
@@ -788,7 +791,7 @@ export default function WordPuzzleGame() {
                   // Reset streak since game wasn't completed
                   newStats.currentStreak = 0;
                   setStats(newStats);
-                  localStorage.setItem('sequenceGameStats', JSON.stringify(newStats));
+                  localStorage.setItem('sequenceGameTimedStats', JSON.stringify(newStats));
                 }
                 
                 // Add unsolved levels to results for display
@@ -822,7 +825,7 @@ export default function WordPuzzleGame() {
                 
                 setGameOver(true);
                 // Clear any current round time to prevent highlighting
-                localStorage.removeItem('currentRoundTime');
+                localStorage.removeItem('currentRoundTimeTimed');
                 
                 // Show stats modal automatically after a brief delay
                 setTimeout(() => setShowStats(true), 500);
@@ -911,7 +914,7 @@ export default function WordPuzzleGame() {
               <div className="space-y-2">
                 {[1, 2, 3, 4, 5].map((position) => {
                   const time = (stats.fastestTimes && stats.fastestTimes[position - 1]) || 0;
-                  const currentRoundTime = parseInt(localStorage.getItem('currentRoundTime') || '0');
+                  const currentRoundTime = parseInt(localStorage.getItem('currentRoundTimeTimed') || '0');
                   const isCurrentRound = time === currentRoundTime && time > 0;
                   const maxTime = Math.max(...(stats.fastestTimes || []), 1);
                   const barWidth = time > 0 ? (time / maxTime) * 100 : 10;
