@@ -466,14 +466,20 @@ export default function WordPuzzleGame() {
       <div className="flex justify-center items-center relative flex-col">
         {!roundStarted && (
           <>
-            <img 
-              src={process.env.PUBLIC_URL + "/letter-game-logo2.png"} 
-              alt="Sequence Game Logo" 
-              className="w-24 h-24 mb-4 object-contain"
-              onError={(e) => {
-                e.target.style.display = 'none';
-              }}
-            />
+            <a 
+              href="https://davisenglish.github.io/sequence-game-home/"
+              target="_self"
+              rel="noopener noreferrer"
+            >
+              <img 
+                src={process.env.PUBLIC_URL + "/letter-game-logo2.png"} 
+                alt="Sequence Game Logo" 
+                className="w-24 h-24 mb-4 object-contain cursor-pointer hover:opacity-80 transition-opacity"
+                onError={(e) => {
+                  e.target.style.display = 'none';
+                }}
+              />
+            </a>
             <h1 className="text-3xl font-bold">Sequence</h1>
           </>
         )}
