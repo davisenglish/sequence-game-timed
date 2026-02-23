@@ -22,58 +22,128 @@ const PREPROCESSED_WORDS = words
   )
   .map(w => w.toUpperCase());
 
-// Memoization cache for sequence counts
-const sequenceCountCache = {};
+// CSV data storage
+let tripletsData = null;
+let tripletsDataPromise = null;
 
-async function getRandomLetters() {
-  const candidates = PREPROCESSED_WORDS;
-  const maxAttempts = 1000;
-  // 75% chance to use hard mode
-  const hardMode = Math.random() < 0.75;
-  const minCount = hardMode ? 1 : 2;
-  const minWordLength = hardMode ? 8 : 4;
-  const sampleSize = 10000;
-  const forbiddenThirdLetters = new Set(['S', 'G', 'D']);
-
-  const filtered = candidates.filter(w => w.length >= minWordLength);
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const word = filtered[Math.floor(Math.random() * filtered.length)];
-    // Pick three increasing indices
-    const idx1 = Math.floor(Math.random() * (word.length - 2));
-    const idx2 = idx1 + 1 + Math.floor(Math.random() * (word.length - idx1 - 1));
-    const idx3 = idx2 + 1 + Math.floor(Math.random() * (word.length - idx2 - 1));
-    if (idx3 >= word.length) continue;
-    const seq = word[idx1] + word[idx2] + word[idx3];
-    // Enforce third letter restriction
-    if (forbiddenThirdLetters.has(seq[2])) continue;
-    // Skip if sequence is consecutive in the word
-    if (word.includes(seq)) continue;
-    // Memoized count of words containing these letters in order
-    if (sequenceCountCache[seq]) {
-      if (sequenceCountCache[seq] >= minCount) return seq;
-      continue;
+// Load and parse CSV file
+async function loadTripletsData() {
+  if (tripletsData) return tripletsData;
+  if (tripletsDataPromise) return tripletsDataPromise;
+  
+  tripletsDataPromise = (async () => {
+    try {
+      const response = await fetch(`${process.env.PUBLIC_URL}/triplets_lessrestrictive.csv`);
+      const text = await response.text();
+      const lines = text.trim().split('\n');
+      
+      const data = [];
+      for (const line of lines) {
+        const columns = line.split(',');
+        if (columns.length >= 3) {
+          const frequency = parseInt(columns[0], 10);
+          const letters = columns[1].toUpperCase();
+          const answers = columns.slice(2, 12).filter(a => a && a.trim()).map(a => a.trim().toUpperCase());
+          
+          if (!isNaN(frequency) && letters.length === 3 && answers.length > 0) {
+            data.push({
+              frequency,
+              letters,
+              answers
+            });
+          }
+        }
+      }
+      
+      tripletsData = data;
+      return data;
+    } catch (error) {
+      console.error('Error loading triplets CSV:', error);
+      return [];
     }
-    // Sample a subset for performance
-    const sample = filtered.length > sampleSize
-      ? Array.from({length: sampleSize}, () => filtered[Math.floor(Math.random() * filtered.length)])
-      : filtered;
-    const regex = new RegExp(seq.split('').join('.*'), 'i');
-    const count = sample.filter(w => regex.test(w)).length;
-    sequenceCountCache[seq] = count;
-    if (count >= minCount) {
-      return seq;
+  })();
+  
+  return tripletsDataPromise;
+}
+
+// Weighted random selection based on frequency
+function weightedRandomSelect(data) {
+  if (!data || data.length === 0) return null;
+  
+  // Calculate total weight
+  const totalWeight = data.reduce((sum, item) => sum + item.frequency, 0);
+  
+  // Generate random number between 0 and totalWeight
+  let random = Math.random() * totalWeight;
+  
+  // Find the item that corresponds to this random number
+  for (const item of data) {
+    random -= item.frequency;
+    if (random <= 0) {
+      return item;
     }
   }
-  // Fallback: random unique letters if no sequence found (should be rare)
+  
+  // Fallback to last item (shouldn't happen)
+  return data[data.length - 1];
+}
+
+async function getRandomLetters(level = 1) {
+  // Load CSV data if not already loaded
+  const data = await loadTripletsData();
+  
+  if (!data || data.length === 0) {
+    // Fallback to old method if CSV fails to load
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   let letters = '';
   while (letters.length < 3) {
     const randomLetter = alphabet[Math.floor(Math.random() * alphabet.length)];
-    if (letters.length === 2 && forbiddenThirdLetters.has(randomLetter)) continue;
     if (!letters.includes(randomLetter)) letters += randomLetter;
   }
   return letters;
+  }
+  
+  // Minimum frequency 5 so level 3 can use 5–20 bucket
+  const filteredData = data.filter(item => item.frequency >= 5);
+  
+  if (filteredData.length === 0) {
+    return data[0] ? data[0].letters : 'ABC';
+  }
+  
+  // Frequency buckets: high (>=56), mid (20–56), low (5–20)
+  const highFreqGroup = data.filter(item => item.frequency >= 56);
+  const midFreqGroup = data.filter(item => item.frequency >= 20 && item.frequency <= 56);
+  const lowFreqGroup = data.filter(item => item.frequency >= 5 && item.frequency <= 20);
+  
+  const random = Math.random();
+  let selected = null;
+  
+  if (level === 1) {
+    // Level 1: 50% freq >= 56, 50% freq 20–56
+    if (random < 0.5 && highFreqGroup.length > 0) {
+      selected = weightedRandomSelect(highFreqGroup);
+    } else if (midFreqGroup.length > 0) {
+      selected = weightedRandomSelect(midFreqGroup);
+    } else if (highFreqGroup.length > 0) {
+      selected = weightedRandomSelect(highFreqGroup);
+    }
+  } else if (level === 2) {
+    // Level 2: 100% freq 20–56
+    if (midFreqGroup.length > 0) {
+      selected = weightedRandomSelect(midFreqGroup);
+    }
+  } else {
+    // Level 3: 50% freq 20–56, 50% freq 5–20
+    if (random < 0.5 && midFreqGroup.length > 0) {
+      selected = weightedRandomSelect(midFreqGroup);
+    } else if (lowFreqGroup.length > 0) {
+      selected = weightedRandomSelect(lowFreqGroup);
+    } else if (midFreqGroup.length > 0) {
+      selected = weightedRandomSelect(midFreqGroup);
+    }
+  }
+  
+  return selected ? selected.letters : filteredData[0].letters;
 }
 
 function isSequential(word, letters) {
@@ -112,77 +182,100 @@ async function isValidWord(word) {
   }
 }
 
-// Helper to find most common possible answers for a given sequence
-function findPossibleAnswers(letters, max = 3) {
+// Helper to find possible answers for a given sequence from CSV
+async function findPossibleAnswers(letters, max = 3) {
   if (!letters || letters.length !== 3) return [];
-  const regex = new RegExp(letters.split('').join('.*'), 'i');
   
-  // Only use preprocessed words, ensure they meet the 5+ letter requirement
-  let candidates = PREPROCESSED_WORDS.filter(w => regex.test(w) && w.length >= 5);
+  // Load CSV data if not already loaded
+  const data = await loadTripletsData();
   
-  // Filter out very long words (likely obscure) - prefer words under 10 letters
+  if (!data || data.length === 0) {
+    // Fallback to old method if CSV fails to load
+    const regex = new RegExp(letters.split('').join('.*'), 'i');
+    let candidates = PREPROCESSED_WORDS.filter(w => regex.test(w) && w.length >= 5);
   candidates = candidates.filter(w => w.length <= 10);
+    candidates.sort((a, b) => a.length - b.length);
+    return candidates.slice(0, max);
+  }
   
-  // Additional filtering: prefer words that are more likely to be common
-  // Exclude words with unusual letter combinations or very technical terms
-  candidates = candidates.filter(w => {
-    // Avoid words with too many consecutive consonants (often technical/obscure)
-    const consonantClusters = w.match(/[BCDFGHJKLMNPQRSTVWXYZ]{3,}/gi);
-    if (consonantClusters && consonantClusters.length > 0) return false;
-    
-    // Avoid words ending in unusual suffixes (often technical)
-    if (w.endsWith('IUM') || w.endsWith('TION') || w.endsWith('SION')) return false;
-    
-    return true;
-  });
+  // Find the entry for this letter combination
+  const normalizedLetters = letters.toUpperCase();
+  const entry = data.find(item => item.letters === normalizedLetters);
   
-  // Sort by length first (shorter words are often more common)
+  if (entry && entry.answers && entry.answers.length > 0) {
+    // Filter out any empty answers (shouldn't be any, but just in case)
+    const availableAnswers = entry.answers.filter(a => a && a.trim());
+    
+    if (availableAnswers.length === 0) {
+      // Fallback if somehow all answers are empty
+      return [];
+    }
+    
+    // Randomly shuffle and select up to max answers
+    // Create a shuffled copy of the array
+    const shuffled = [...availableAnswers].sort(() => Math.random() - 0.5);
+    
+    // Return up to max answers (or all available if fewer than max)
+    return shuffled.slice(0, Math.min(max, shuffled.length));
+  }
+  
+  // Fallback if not found in CSV
+  const regex = new RegExp(letters.split('').join('.*'), 'i');
+  let candidates = PREPROCESSED_WORDS.filter(w => regex.test(w) && w.length >= 5);
+  candidates = candidates.filter(w => w.length <= 10);
   candidates.sort((a, b) => a.length - b.length);
-  
-  // Randomize the selection to get a good mix of different lengths
-  const randomizedCandidates = [];
-  const lengthGroups = {};
-  
-  // Group words by length
-  candidates.forEach(word => {
-    const length = word.length;
-    if (!lengthGroups[length]) {
-      lengthGroups[length] = [];
-    }
-    lengthGroups[length].push(word);
-  });
-  
-  // Get available lengths and shuffle them to avoid always starting with shortest
-  const lengths = Object.keys(lengthGroups).sort(() => Math.random() - 0.5);
-  
-  // Try to get one word from each available length, then fill remaining slots
-  const targetLengths = [5, 6, 7, 8, 9, 10]; // Preferred length order
-  
-  // First, try to get one word from each preferred length (if available)
-  for (const targetLength of targetLengths) {
-    if (lengthGroups[targetLength] && lengthGroups[targetLength].length > 0 && randomizedCandidates.length < max) {
-      const wordsInGroup = lengthGroups[targetLength];
-      const randomWord = wordsInGroup[Math.floor(Math.random() * wordsInGroup.length)];
-      randomizedCandidates.push(randomWord);
-    }
-  }
-  
-  // If we still have slots, fill with random words from any available length
-  if (randomizedCandidates.length < max) {
-    const remainingLengths = Object.keys(lengthGroups).filter(length => 
-      lengthGroups[length].length > 0 && 
-      !randomizedCandidates.some(word => word.length === parseInt(length))
-    );
+  return candidates.slice(0, max);
+}
+
+// Get a single possible answer for the given triplet (for hint system)
+async function getOnePossibleAnswer(letters) {
+  const answers = await findPossibleAnswers(letters, 20);
+  if (!answers || answers.length === 0) return null;
+  return answers[Math.floor(Math.random() * answers.length)];
+}
+
+// Component to display possible answers asynchronously
+function PossibleAnswers({ letters, max = 3, ensureIncluded }) {
+  const [answers, setAnswers] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
     
-    for (const length of remainingLengths) {
-      if (randomizedCandidates.length >= max) break;
-      const wordsInGroup = lengthGroups[length];
-      const randomWord = wordsInGroup[Math.floor(Math.random() * wordsInGroup.length)];
-      randomizedCandidates.push(randomWord);
-    }
+    (async () => {
+      const result = await findPossibleAnswers(letters, max);
+      if (!isMounted) return;
+      let display = result || [];
+      if (ensureIncluded && typeof ensureIncluded === 'string' && ensureIncluded.trim()) {
+        const included = ensureIncluded.trim().toUpperCase();
+        if (!display.includes(included)) {
+          display = [included, ...display].slice(0, max);
+        }
+      }
+      setAnswers(display);
+      setLoading(false);
+    })();
+    
+    return () => {
+      isMounted = false;
+    };
+  }, [letters, max, ensureIncluded]);
+
+  if (loading) {
+    return <div className="text-xs text-gray-400">Loading...</div>;
   }
-  
-  return randomizedCandidates;
+
+  if (answers.length === 0) {
+    return <div className="text-xs text-gray-400">No answers found</div>;
+  }
+
+  return (
+    <div className="space-y-1">
+      {answers.map((word, idx) => (
+        <div key={idx}>{word}</div>
+      ))}
+    </div>
+  );
 }
 
 export default function WordPuzzleGame() {
@@ -201,6 +294,7 @@ export default function WordPuzzleGame() {
   const [showStats, setShowStats] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [needsScrollForKeyboard, setNeedsScrollForKeyboard] = useState(false);
   const [stats, setStats] = useState({
     gamesPlayed: 0,
     gamesWon: 0,
@@ -211,8 +305,30 @@ export default function WordPuzzleGame() {
   });
   const [showRules, setShowRules] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
+  const [pressedKey, setPressedKey] = useState(null);
+  const [hintWord, setHintWord] = useState(null);
+  const [hintRevealCount, setHintRevealCount] = useState(0); // kept for compatibility (one-hint-per-round: unused)
+  const [hintRevealAnimating, setHintRevealAnimating] = useState(false);
+  const [hintAvailable, setHintAvailable] = useState(false);
+  const [hintFillProgress, setHintFillProgress] = useState(0);
+  const [hintReadyPop, setHintReadyPop] = useState(false);
+  const hintUnlockTimeoutRef = useRef(null);
+  const hintFillIntervalRef = useRef(null);
   const startTimeRef = useRef(null);
   const inputRef = useRef(null);
+  /** When the round ends (win), this is the single source of truth for the final time (avoids timer race). */
+  const finalGameTimeRef = useRef(null);
+  /** Tracks current timer value for use after async work (e.g. isValidWord); keeps modal time in sync with gameplay display. */
+  const gameTimeRef = useRef(0);
+  const inputValueRef = useRef(''); // on mobile, stays in sync with input so Submit sees latest value
+  const backspaceHoldTimeoutRef = useRef(null);
+  const backspaceHoldIntervalRef = useRef(null);
+  const lastKeyPressRef = useRef({ key: null, time: 0 });
+  const isSubmittingRef = useRef(false);
+  const contentAboveKeyboardRef = useRef(null);
+  const KEYBOARD_BOTTOM_OFFSET = 30;
+  const KEYBOARD_HEIGHT_ESTIMATE = 280;
+  const KEYBOARD_GAP_MIN = 0;
 
   // Function to generate all three sets of unique letters
   const generateAllLevelLetters = async () => {
@@ -223,9 +339,10 @@ export default function WordPuzzleGame() {
       let attempts = 0;
       const maxAttempts = 100;
       let newLetters;
+      const level = i + 1; // Level 1, 2, or 3
       
       do {
-        newLetters = await getRandomLetters();
+        newLetters = await getRandomLetters(level);
         attempts++;
       } while (used.has(newLetters) && attempts < maxAttempts);
       
@@ -248,9 +365,9 @@ export default function WordPuzzleGame() {
       setStats(JSON.parse(savedStats));
     }
     
-    // Detect mobile device
+    // Detect mobile/tablet (show virtual keyboard for phones and tablets)
     const checkMobile = () => {
-      setIsMobile(window.innerWidth <= 768);
+      setIsMobile(window.innerWidth <= 1024);
     };
     
     checkMobile();
@@ -259,15 +376,119 @@ export default function WordPuzzleGame() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
+  // When mobile + keyboard shown: allow scroll if content would overlap keyboard (keep ≥15px gap)
+  useEffect(() => {
+    if (!isMobile || !roundStarted || gameOver) {
+      setNeedsScrollForKeyboard(false);
+      return;
+    }
+    const checkOverlap = () => {
+      const el = contentAboveKeyboardRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const contentBottom = rect.bottom;
+      const keyboardTop = window.innerHeight - KEYBOARD_BOTTOM_OFFSET - KEYBOARD_HEIGHT_ESTIMATE;
+      const threshold = keyboardTop - KEYBOARD_GAP_MIN;
+      setNeedsScrollForKeyboard(contentBottom > threshold);
+    };
+    let ro;
+    const scheduleCheck = () => {
+      requestAnimationFrame(() => {
+        if (contentAboveKeyboardRef.current) {
+          checkOverlap();
+          if (!ro && contentAboveKeyboardRef.current) {
+            ro = new ResizeObserver(checkOverlap);
+            ro.observe(contentAboveKeyboardRef.current);
+          }
+        }
+      });
+    };
+    scheduleCheck();
+    const t = setTimeout(scheduleCheck, 100);
+    window.addEventListener('resize', checkOverlap);
+    return () => {
+      clearTimeout(t);
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', checkOverlap);
+    };
+  }, [isMobile, roundStarted, gameOver]);
+
   useEffect(() => {
     if (!roundStarted || gameOver) return;
-    
+
     const timer = setInterval(() => {
-      setGameTime(prev => prev + 1);
+      setGameTime(prev => {
+        const next = prev + 1;
+        gameTimeRef.current = next;
+        return next;
+      });
     }, 1000);
-    
+
     return () => clearInterval(timer);
   }, [roundStarted, gameOver]);
+
+  const startHintFillTimer = () => {
+    setHintAvailable(false);
+    setHintFillProgress(0);
+    setHintReadyPop(false);
+    if (hintUnlockTimeoutRef.current) clearTimeout(hintUnlockTimeoutRef.current);
+    if (hintFillIntervalRef.current) clearInterval(hintFillIntervalRef.current);
+    hintFillIntervalRef.current = setInterval(() => {
+      setHintFillProgress((prev) => {
+        if (prev >= 99) {
+          if (hintFillIntervalRef.current) {
+            clearInterval(hintFillIntervalRef.current);
+            hintFillIntervalRef.current = null;
+          }
+          return 100;
+        }
+        return prev + 1;
+      });
+    }, 300);
+    hintUnlockTimeoutRef.current = setTimeout(() => {
+      hintUnlockTimeoutRef.current = null;
+      setHintFillProgress(100);
+      setHintAvailable(true);
+      setHintReadyPop(true);
+      setTimeout(() => setHintReadyPop(false), 200);
+    }, 30000);
+  };
+
+  const clearHintTimers = () => {
+    if (hintUnlockTimeoutRef.current) {
+      clearTimeout(hintUnlockTimeoutRef.current);
+      hintUnlockTimeoutRef.current = null;
+    }
+    if (hintFillIntervalRef.current) {
+      clearInterval(hintFillIntervalRef.current);
+      hintFillIntervalRef.current = null;
+    }
+  };
+
+  // Reset hint when triplet/level changes; start 30s fill for this round
+  useEffect(() => {
+    setHintWord(null);
+    setHintRevealCount(0);
+    setHintAvailable(false);
+    setHintFillProgress(0);
+    clearHintTimers();
+    if (roundStarted && !gameOver && letters) {
+      startHintFillTimer();
+    }
+    return clearHintTimers;
+  }, [letters]);
+
+  // When game first starts (roundStarted), start the 30s hint fill for level 1
+  useEffect(() => {
+    if (!roundStarted || gameOver || !letters) return;
+    startHintFillTimer();
+    return clearHintTimers;
+  }, [roundStarted, gameOver]);
+
+  // Keep inputValueRef in sync with input state so mobile Submit always has a source of truth
+  useEffect(() => {
+    inputValueRef.current = input;
+  }, [input]);
 
   // Ensure input field gets focus when game starts and after transitions
   useEffect(() => {
@@ -285,6 +506,8 @@ export default function WordPuzzleGame() {
 
   const handleBegin = () => {
     setShowRevealAnimation(true);
+    setError(false);
+    setErrorMessage('');
     // Start the game after the reveal animation completes
     setTimeout(() => {
     setRoundStarted(true);
@@ -298,62 +521,66 @@ export default function WordPuzzleGame() {
     }, 500); // Match the animation duration
   };
 
-    const handleSubmit = async (e) => {
+    const handleSubmit = async (e, valueFromMobile) => {
     e.preventDefault();
     if (!roundStarted || gameOver || isTransitioning) return;
-    
-    const word = input.trim().toLowerCase();
-    if (!word) { setError(true); setErrorMessage('Please enter a word'); return; }
-    if (word.length < 5) { setError(true); setErrorMessage('Must be 5+ letters long'); return; }
-    if (!isSequential(word, letters)) { setError(true); setErrorMessage(`Word must contain '${letters}' in order`); return; }
-    if (!(await isValidWord(word))) { setError(true); setErrorMessage('Not a valid English word'); return; }
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+    try {
+      // On mobile, use value passed from the tap handler (captured at tap time); otherwise use state/ref/DOM
+      const currentInput = isMobile && valueFromMobile !== undefined
+      ? valueFromMobile
+      : isMobile
+        ? ((inputRef.current && inputRef.current.value != null ? String(inputRef.current.value) : '') || (typeof inputValueRef.current === 'string' ? inputValueRef.current : '') || input)
+        : input;
+      const word = currentInput.trim().toLowerCase();
+      if (!word) { setError(true); setErrorMessage('Please enter a word'); return; }
+      if (word.length < 5) { setError(true); setErrorMessage('Must be 5+ letters long'); return; }
+      if (!isSequential(word, letters)) { setError(true); setErrorMessage(`Word must contain '${letters}' in order`); return; }
+      if (!(await isValidWord(word))) { setError(true); setErrorMessage('Not a valid English word'); return; }
 
-    // Record the result for this level
-    const levelResult = {
-      letters: letters,
-      word: word,
-      time: gameTime,
-      gaveUp: false
-    };
-    
-    setLevelResults(prev => [...prev, levelResult]);
-    
-    // Show score popup (currently disabled)
-    // setLetterPopup(`+${word.length}`);
-    // setTimeout(() => setLetterPopup(null), 1500);
-    
-    setInput('');
-    setError(false);
-    setErrorMessage('');
-    
-    // Check if this was the final level
-    if (currentLevel === 3) {
-      // Game complete
-      setGameOver(true);
-      updateStats();
-      setTimeout(() => setShowStats(true), 500);
-    } else {
-      // Move to next level
-      setIsTransitioning(true);
-      
-      // Fade out current letters
-      setTimeout(async () => {
-        // Use pre-generated letters for next level
-        const nextLevel = currentLevel + 1;
-        setLetters(allLevelLetters[nextLevel - 1]);
-        setCurrentLevel(nextLevel);
-        
-        // Brief fade-in animation
-        setTimeout(() => {
-          setIsTransitioning(false);
-          // Focus the input field immediately after transition
+      const timeToRecord = gameTimeRef.current;
+      const levelResult = {
+        letters: letters,
+        word: word,
+        time: timeToRecord,
+        gaveUp: false
+      };
+
+      setLevelResults(prev => [...prev, levelResult]);
+
+      setInput('');
+      inputValueRef.current = '';
+      setError(false);
+      setErrorMessage('');
+
+      if (currentLevel === 3) {
+        finalGameTimeRef.current = timeToRecord;
+        setGameOver(true);
+        updateStats(timeToRecord);
+        setTimeout(() => setShowStats(true), 500);
+      } else {
+        setIsTransitioning(true);
+
+        setTimeout(async () => {
+          const nextLevel = currentLevel + 1;
+          setLetters(allLevelLetters[nextLevel - 1]);
+          setCurrentLevel(nextLevel);
+
           setTimeout(() => {
-            if (inputRef.current) {
-              inputRef.current.focus();
-            }
-          }, 50);
-        }, 100);
-      }, 300); // Fade out duration
+            setIsTransitioning(false);
+            setError(false);
+            setErrorMessage('');
+            setTimeout(() => {
+              if (inputRef.current) {
+                inputRef.current.focus();
+              }
+            }, 50);
+          }, 100);
+        }, 300);
+      }
+    } finally {
+      isSubmittingRef.current = false;
     }
   };
 
@@ -362,7 +589,9 @@ export default function WordPuzzleGame() {
   const resetGame = () => {
     // Clear the current round time when starting a new game
     localStorage.removeItem('currentRoundTimeTimed');
-    
+    finalGameTimeRef.current = null;
+    gameTimeRef.current = 0;
+
     setRoundStarted(false);
     setShowRevealAnimation(false);
     setShowStats(false);
@@ -373,18 +602,28 @@ export default function WordPuzzleGame() {
     setGameOver(false);
     setLetterPopup(null);
     setIsTransitioning(false);
+    setError(false);
+    setErrorMessage('');
+    setHintWord(null);
+    setHintRevealCount(0);
+    setHintAvailable(false);
+    setHintFillProgress(0);
+    setHintReadyPop(false);
+    clearHintTimers();
     
     (async () => {
       const allLetters = await generateAllLevelLetters();
       setAllLevelLetters(allLetters);
       setLetters(allLetters[0]); // Set first level letters
     })();
+    inputValueRef.current = '';
     setInput('');
   };
 
-  const updateStats = () => {
+  const updateStats = (recordedTime) => {
     const newStats = { ...stats };
-    
+    const timeForThisRound = recordedTime != null ? recordedTime : gameTime;
+
     // Ensure all required properties exist
     newStats.gamesPlayed = newStats.gamesPlayed || 0;
     newStats.gamesWon = newStats.gamesWon || 0;
@@ -392,16 +631,16 @@ export default function WordPuzzleGame() {
     newStats.maxStreak = newStats.maxStreak || 0;
     newStats.fastestTimes = newStats.fastestTimes || [];
     newStats.averageTimes = newStats.averageTimes || [];
-    
-        // Update games played and won
+
+    // Update games played and won
     newStats.gamesPlayed += 1;
-    
+
     // Only count as won if no levels were given up on
     const hasGiveUps = levelResults.some(result => result.gaveUp);
     if (!hasGiveUps) {
       newStats.gamesWon += 1;
       newStats.currentStreak += 1;
-      
+
       // Update max streak if current streak is higher
       if (newStats.currentStreak > newStats.maxStreak) {
         newStats.maxStreak = newStats.currentStreak;
@@ -410,28 +649,177 @@ export default function WordPuzzleGame() {
       // Reset streak if any level was given up on
       newStats.currentStreak = 0;
     }
-    
-    // Update fastest times - replace existing times with new ones to enable highlighting
-    if (gameTime > 0) {
-      // Remove the old time if it exists, then add the new one
-      newStats.fastestTimes = newStats.fastestTimes.filter(t => t !== gameTime);
-      newStats.fastestTimes.push(gameTime);
+
+    // Update fastest times - use the same recorded time so modal and list match
+    if (timeForThisRound > 0) {
+      newStats.fastestTimes = newStats.fastestTimes.filter(t => t !== timeForThisRound);
+      newStats.fastestTimes.push(timeForThisRound);
       newStats.fastestTimes.sort((a, b) => a - b); // Sort ascending
       newStats.fastestTimes = newStats.fastestTimes.slice(0, 5); // Keep top 5
-      
-      // Store the current round's time for highlighting - Version specific
-      localStorage.setItem('currentRoundTimeTimed', gameTime.toString());
+
+      localStorage.setItem('currentRoundTimeTimed', timeForThisRound.toString());
     }
-    
+
     setStats(newStats);
     localStorage.setItem('sequenceGameTimedStats', JSON.stringify(newStats));
   };
 
   const handleInputChange = (e) => {
     if (!roundStarted || gameOver || isTransitioning) return;
-    setInput(e.target.value);
+    const v = e.target.value;
+    inputValueRef.current = v;
+    setInput(v);
     if (error) { setError(false); setErrorMessage(''); }
   };
+
+  // Virtual keyboard handlers
+  const handleKeyboardLetter = (letter) => {
+    if (!roundStarted || gameOver || isTransitioning) return;
+    
+    // Prevent duplicate rapid key presses (debounce)
+    const now = Date.now();
+    if (lastKeyPressRef.current.key === letter && now - lastKeyPressRef.current.time < 100) {
+      return; // Ignore duplicate press within 100ms
+    }
+    lastKeyPressRef.current = { key: letter, time: now };
+    
+    const input = inputRef.current;
+    if (input) {
+      // Ensure input has focus
+      if (document.activeElement !== input) {
+        input.focus();
+      }
+      
+      let start = input.selectionStart;
+      const end = input.selectionEnd || 0;
+      const currentValue = input.value;
+      
+      // If cursor is at start and field has text, or if input lost focus, move to end
+      if (start === 0 && currentValue.length > 0 && document.activeElement !== input) {
+        start = currentValue.length;
+      } else if (start === null || start === undefined) {
+        start = currentValue.length;
+      }
+      
+      // Replace selected text or insert at cursor position
+      const newValue = currentValue.slice(0, start) + letter + currentValue.slice(end);
+      inputValueRef.current = newValue;
+      setInput(newValue);
+      
+      // Set cursor position after the inserted letter
+      setTimeout(() => {
+        if (inputRef.current) {
+          const newPosition = start + 1;
+          inputRef.current.setSelectionRange(newPosition, newPosition);
+        }
+      }, 0);
+    } else {
+      // Fallback if input ref is not available
+      const next = (inputValueRef.current || '') + letter;
+      inputValueRef.current = next;
+      setInput(next);
+    }
+    
+    if (error) { setError(false); setErrorMessage(''); }
+  };
+
+  const handleKeyboardBackspace = () => {
+    if (!roundStarted || gameOver || isTransitioning) return;
+    
+    const input = inputRef.current;
+    if (input) {
+      const start = input.selectionStart || 0;
+      const end = input.selectionEnd || 0;
+      const currentValue = input.value;
+      
+      if (start !== end) {
+        // Delete selected text
+        const newValue = currentValue.slice(0, start) + currentValue.slice(end);
+        inputValueRef.current = newValue;
+        setInput(newValue);
+        setTimeout(() => {
+          if (inputRef.current) {
+            inputRef.current.setSelectionRange(start, start);
+          }
+        }, 0);
+      } else if (start > 0) {
+        // Delete character before cursor
+        const newValue = currentValue.slice(0, start - 1) + currentValue.slice(start);
+        inputValueRef.current = newValue;
+        setInput(newValue);
+        setTimeout(() => {
+          if (inputRef.current) {
+            inputRef.current.setSelectionRange(start - 1, start - 1);
+          }
+        }, 0);
+      }
+    } else {
+      // Fallback if input ref is not available
+      const next = (inputValueRef.current || '').slice(0, -1);
+      inputValueRef.current = next;
+      setInput(next);
+    }
+    
+    if (error) { setError(false); setErrorMessage(''); }
+  };
+
+  // Keep typing feeling snappy on touch devices by ensuring the input keeps focus.
+  // We call this after virtual-key presses.
+  const refocusInputSoon = () => {
+    if (inputRef.current) {
+      // Use rAF so it runs after the pointer event completes.
+      requestAnimationFrame(() => {
+        if (inputRef.current && roundStarted && !gameOver && !isTransitioning) {
+          inputRef.current.focus();
+          // Always position cursor at end when typing starts
+          const pos = inputRef.current.value.length;
+          inputRef.current.setSelectionRange(pos, pos);
+          // On mobile, force cursor visibility with a slight delay
+          if (isMobile) {
+            setTimeout(() => {
+              if (inputRef.current) {
+                inputRef.current.focus();
+                inputRef.current.setSelectionRange(pos, pos);
+              }
+            }, 50);
+          }
+        }
+      });
+    }
+  };
+
+  // On mobile, suppress the native keyboard by making the input readOnly + inputMode="none",
+  // but still allow physical keyboards (e.g., bluetooth) by listening for keydown events.
+  useEffect(() => {
+    if (!isMobile || !roundStarted || gameOver) return;
+
+    const onKeyDown = (e) => {
+      if (isTransitioning) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const val = (inputRef.current?.value ?? inputValueRef.current) ?? '';
+        handleSubmit(e, val);
+        return;
+      }
+
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        handleKeyboardBackspace();
+        return;
+      }
+
+      // Letters only
+      if (/^[a-zA-Z]$/.test(e.key)) {
+        e.preventDefault();
+        handleKeyboardLetter(e.key.toLowerCase());
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown, { passive: false });
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isMobile, roundStarted, gameOver, isTransitioning]);
 
   const clearStats = () => {
     // Clear all statistical data
@@ -448,6 +836,30 @@ export default function WordPuzzleGame() {
     });
   };
 
+  const handleHint = async () => {
+    if (isTransitioning || !letters) return;
+    if (hintWord) {
+      setError(true);
+      setErrorMessage(`Hint already used - ${hintWord.slice(0, 3).toUpperCase()}`);
+      return;
+    }
+    if (!hintAvailable) {
+      setError(true);
+      setErrorMessage('Hint available after 30 seconds');
+      return;
+    }
+    const word = await getOnePossibleAnswer(letters);
+    if (!word) return;
+    const hintVal = word.slice(0, 3).toLowerCase();
+    setHintWord(word);
+    inputValueRef.current = hintVal;
+    setInput(hintVal);
+    setError(false);
+    setErrorMessage('');
+    setHintRevealAnimating(true);
+    setTimeout(() => setHintRevealAnimating(false), 300);
+  };
+
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -462,7 +874,9 @@ export default function WordPuzzleGame() {
   const size = 80;
 
   return (
-    <div className="p-6 max-w-xl mx-auto text-center space-y-6 relative overflow-hidden game-transition">
+    <div className={isMobile ? (needsScrollForKeyboard ? "min-h-[100dvh] flex flex-col" : "h-[100dvh] max-h-[100dvh] flex flex-col overflow-hidden") : ""}>
+      <div className={isMobile ? `flex-1 min-h-0 ${needsScrollForKeyboard ? "overflow-y-auto pb-[5px]" : "overflow-hidden pb-[320px]"}` : ""}>
+        <div className="p-6 max-w-xl mx-auto text-center space-y-6 relative overflow-hidden game-transition">
       <div className="flex justify-center items-center relative flex-col">
         {!roundStarted && (
           <>
@@ -473,14 +887,14 @@ export default function WordPuzzleGame() {
             >
               <img 
                 src={process.env.PUBLIC_URL + "/letter-game-logo2.png"} 
-                alt="Sequence Game Logo" 
+                alt="Stringlish Game Logo" 
                 className="w-24 h-24 mb-4 object-contain cursor-pointer hover:opacity-80 transition-opacity"
                 onError={(e) => {
                   e.target.style.display = 'none';
                 }}
               />
             </a>
-            <h1 className="text-3xl font-bold">Sequence</h1>
+            <h1 className="text-3xl font-bold">Stringlish</h1>
           </>
         )}
         {!roundStarted && (
@@ -490,28 +904,68 @@ export default function WordPuzzleGame() {
           </p>
         )}
         {roundStarted && (
-          <div className="flex items-center space-x-3">
-            <a 
-              href="https://davisenglish.github.io/sequence-game-home/"
-              className="text-gray-600 hover:text-gray-800 transition-colors"
-              title="Home"
-            >
-              <FontAwesomeIcon icon={faHouseChimney} className="text-lg" />
-            </a>
-            <button 
-              onClick={() => setShowStats(true)}
-              className="text-gray-600 hover:text-gray-800 transition-colors"
-              title="Statistics"
-            >
-              <FontAwesomeIcon icon={faChartSimple} className="text-lg" />
-            </button>
-            <button 
-              onClick={() => setShowRules(true)}
-              className="text-gray-500 hover:text-gray-700 transition-colors"
-              title="Rules"
-            >
-              <FontAwesomeIcon icon={faCircleQuestion} className="text-xl" />
-            </button>
+          <div className="flex items-center w-full">
+            <div className="flex-1 min-w-0 flex items-center">
+              <span className="text-base font-semibold text-gray-600 tabular-nums border border-gray-300 rounded px-2 py-1 bg-gray-50">
+                {formatTime(gameOver && finalGameTimeRef.current != null ? finalGameTimeRef.current : gameTime)}
+              </span>
+            </div>
+            <div className="flex items-center justify-center flex-shrink-0 space-x-3">
+              <a 
+                href="https://davisenglish.github.io/sequence-game-home/"
+                className="text-gray-600 hover:text-gray-800 transition-colors"
+                title="Home"
+              >
+                <FontAwesomeIcon icon={faHouseChimney} className="text-lg" />
+              </a>
+              <button 
+                onClick={() => setShowStats(true)}
+                className="text-gray-600 hover:text-gray-800 transition-colors"
+                title="Statistics"
+              >
+                <FontAwesomeIcon icon={faChartSimple} className="text-lg" />
+              </button>
+              <button 
+                onClick={() => setShowRules(true)}
+                className="text-gray-500 hover:text-gray-700 transition-colors"
+                title="Rules"
+              >
+                <FontAwesomeIcon icon={faCircleQuestion} className="text-xl" />
+              </button>
+            </div>
+            <div className="flex-1 min-w-0 flex items-center justify-end">
+              {!gameOver && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (roundStarted && !gameOver) {
+                      const newStats = { ...stats };
+                      newStats.gamesPlayed = (newStats.gamesPlayed || 0) + 1;
+                      newStats.currentStreak = 0;
+                      setStats(newStats);
+                      localStorage.setItem('sequenceGameTimedStats', JSON.stringify(newStats));
+                    }
+                    if (roundStarted && !gameOver) {
+                      const unsolvedLevels = [];
+                      if (levelResults.length < currentLevel) {
+                        unsolvedLevels.push({ letters: letters, word: null, time: gameTime, gaveUp: true });
+                      }
+                      for (let i = currentLevel + 1; i <= 3; i++) {
+                        const levelLetters = allLevelLetters[i - 1];
+                        unsolvedLevels.push({ letters: levelLetters, word: null, time: gameTime, gaveUp: true });
+                      }
+                      setLevelResults(prev => [...prev, ...unsolvedLevels]);
+                    }
+                    setGameOver(true);
+                    localStorage.removeItem('currentRoundTimeTimed');
+                    setTimeout(() => setShowStats(true), 500);
+                  }}
+                  className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                >
+                  Give Up?
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -539,20 +993,9 @@ export default function WordPuzzleGame() {
         <>
 
 
-          {/* Timer - Bigger and centered */}
-          {roundStarted && !gameOver && (
-            <div className="text-3xl font-bold text-black mb-6 fade-in">
-              {formatTime(gameTime)}
-            </div>
-          )}
-
           {/* Game Over Results Display */}
           {gameOver && (
             <div className="text-center mb-6 slide-up">
-              <div className={`font-bold mb-6 ${levelResults.every(result => !result.gaveUp) ? 'text-4xl' : 'text-2xl'}`}>
-                {levelResults.every(result => !result.gaveUp) ? formatTime(gameTime) : "Better Luck Next Time!"}
-              </div>
-              
               {/* Level Results */}
               <div className="flex justify-center space-x-8">
                 {levelResults.map((result, index) => (
@@ -627,12 +1070,12 @@ export default function WordPuzzleGame() {
                     {/* Word or Possible Answers */}
                     {result.gaveUp ? (
                       <div className="text-xs text-gray-500">
-                        <div className="font-medium mb-1">Possible answers:</div>
-                        <div className="space-y-1">
-                          {findPossibleAnswers(result.letters, 3).map((word, idx) => (
-                            <div key={idx}>{word}</div>
-                          ))}
-                        </div>
+                        <div className="font-medium mb-1">Possible Answers:</div>
+                        <PossibleAnswers
+                          letters={result.letters}
+                          max={3}
+                          ensureIncluded={result.letters === letters ? hintWord : undefined}
+                        />
                       </div>
                     ) : (
                       <div className="text-sm text-green-800 font-medium">
@@ -711,53 +1154,162 @@ export default function WordPuzzleGame() {
 
           {/* Input Section */}
           {roundStarted && !gameOver && (
-            <div className="space-y-4 fade-in">
+            <div ref={contentAboveKeyboardRef} className="space-y-4 fade-in">
+              <div
+                className={`flex border rounded overflow-hidden ${error ? 'border-[#c85f31]' : 'border-gray-300'}`}
+              >
+              <div
+                className={`flex-1 min-w-0 ${hintRevealAnimating ? 'hint-reveal-anim' : ''}`}
+                style={{ transformOrigin: 'left center' }}
+              >
               <input 
                 ref={inputRef}
                 type="text" 
                 value={input} 
                 onChange={handleInputChange}
-                className={`border rounded px-4 py-2 w-full text-lg ${error?'border-red-600 text-red-600':''}`}
+                className="border-0 rounded-none px-4 py-2 w-full text-lg focus:ring-0 focus:outline-none"
+                style={{
+                  ...(error ? {
+                    color: '#c85f31',
+                    caretColor: '#c85f31'
+                  } : {
+                    caretColor: '#000000'
+                  }),
+                  ...(isMobile ? {
+                    WebkitTapHighlightColor: 'transparent',
+                    cursor: 'text'
+                  } : {
+                    cursor: 'text'
+                  })
+                }}
                 placeholder="Enter word..." 
                 disabled={!roundStarted || gameOver || isTransitioning}
-                onKeyDown={e=>e.key==='Enter'&&handleSubmit(e)} 
+                readOnly={isMobile}
+                inputMode={isMobile ? 'none' : undefined}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                onTouchStart={(e) => {
+                  // On mobile, ensure cursor is visible when tapping
+                  if (isMobile && inputRef.current) {
+                    e.preventDefault();
+                    const input = inputRef.current;
+                    // Temporarily remove readonly to show cursor, then restore
+                    input.removeAttribute('readonly');
+                    input.focus();
+                    const pos = input.value.length;
+                    input.setSelectionRange(pos, pos);
+                    // Restore readonly after cursor is shown
+                    setTimeout(() => {
+                      input.setAttribute('readonly', 'readonly');
+                      input.focus();
+                      input.setSelectionRange(pos, pos);
+                    }, 100);
+                    setTimeout(() => {
+                      input.focus();
+                      input.setSelectionRange(pos, pos);
+                    }, 200);
+                  }
+                }}
+                onFocus={(e) => {
+                  // Ensure cursor is visible when input is focused
+                  if (e.target) {
+                    const input = e.target;
+                    // If cursor is at start (0) and there's existing text, move to end
+                    // This handles the case where user taps outside then back in
+                    let pos = input.selectionStart;
+                    if ((pos === 0 || pos === null || pos === undefined) && input.value.length > 0) {
+                      pos = input.value.length;
+                    } else if (pos === null || pos === undefined) {
+                      pos = input.value.length;
+                    }
+                    setTimeout(() => {
+                      input.setSelectionRange(pos, pos);
+                    }, 0);
+                    // On mobile, make extra attempts to show cursor
+                    if (isMobile) {
+                      setTimeout(() => {
+                        input.setSelectionRange(pos, pos);
+                        input.focus();
+                      }, 10);
+                      setTimeout(() => {
+                        input.setSelectionRange(pos, pos);
+                      }, 50);
+                    }
+                  }
+                }}
+                onKeyDown={e=>e.key==='Enter'&&handleSubmit(e, isMobile ? (inputRef.current?.value ?? inputValueRef.current ?? input) : undefined)} 
+                onClick={(e) => {
+                  // On mobile, ensure cursor is visible when user taps to position it
+                  if (isMobile && inputRef.current) {
+                    const input = inputRef.current;
+                    // Get click position relative to input
+                    const rect = input.getBoundingClientRect();
+                    const clickX = e.clientX - rect.left;
+                    // Approximate cursor position based on click position
+                    const textBeforeClick = input.value.substring(0, input.selectionStart || 0);
+                    const clickPosition = Math.round(clickX / 8);
+                    const newPosition = Math.max(0, Math.min(input.value.length, clickPosition));
+                    input.setSelectionRange(newPosition, newPosition);
+                    // Force focus to show cursor
+                    input.focus();
+                    // Multiple attempts to ensure cursor visibility
+                    setTimeout(() => {
+                      input.setSelectionRange(newPosition, newPosition);
+                    }, 10);
+                    setTimeout(() => {
+                      input.setSelectionRange(newPosition, newPosition);
+                    }, 50);
+                  }
+                }}
                 onBlur={() => {
-                  // Refocus if the user accidentally clicks away and the game is still active
+                  // Avoid fighting focus during virtual keyboard taps; only refocus if the user
+                  // actually left the field (e.g., tapped elsewhere).
                   if (roundStarted && !gameOver && !isTransitioning) {
                     setTimeout(() => {
-                      if (inputRef.current) {
+                      if (inputRef.current && document.activeElement !== inputRef.current) {
                         inputRef.current.focus();
                       }
-                    }, 100);
+                    }, 150);
                   }
                 }}
               />
-              {error && <p className="text-red-600">{errorMessage}</p>}
-              <div className="relative inline-block">
-                <button 
-                  onClick={handleSubmit} 
-                  style={{backgroundColor:'#195b7c'}} 
-                  className="text-white px-4 py-2 rounded text-lg disabled:opacity-50" 
-                  disabled={!roundStarted || gameOver || isTransitioning}
-                >
-                  Submit
-                </button>
               </div>
-
-        </div>
-      )}
-
-          {/* Level Progress Indicators */}
-          {roundStarted && !gameOver && (
-            <div className="mt-4 fade-in">
-            <div className="relative inline-block font-bold text-center">
+              <button
+                type="button"
+                onClick={handleHint}
+                disabled={!roundStarted || gameOver || isTransitioning}
+                className={`flex-shrink-0 border-l py-2 px-3 min-w-[2.75rem] flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed relative overflow-hidden ${error ? 'border-[#c85f31]' : 'border-gray-300'} ${
+                  hintWord
+                    ? 'bg-white text-gray-400'
+                    : hintAvailable
+                      ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800'
+                      : 'bg-white text-gray-400'
+                }`}
+                title={hintAvailable ? "Hint" : "Hint available in 30 seconds"}
+                aria-label={hintAvailable ? "Hint" : "Hint loading"}
+              >
+                {!hintWord && !hintAvailable && (
+                  <span
+                    className="absolute bottom-0 left-0 pointer-events-none"
+                    aria-hidden
+                    style={{ width: `${hintFillProgress}%`, height: '10%', backgroundColor: '#195b7c' }}
+                  />
+                )}
+                <span className={`relative z-10 text-sm font-medium ${hintReadyPop ? 'hint-ready-pop' : ''}`}>
+                  Hint
+                </span>
+              </button>
+              </div>
+              {/* Level Progress Indicators */}
+              <div className="relative inline-block font-bold text-center">
                 <div className="flex justify-center space-x-4">
-                                    {[1, 2, 3].map((level) => {
+                  {[1, 2, 3].map((level) => {
                     const levelResult = levelResults[level - 1];
                     const isCompleted = levelResults.length >= level;
                     const isCurrent = currentLevel === level && !gameOver;
                     const gaveUp = levelResult && levelResult.gaveUp;
-                    
                     return (
                       <div
                         key={level}
@@ -775,67 +1327,639 @@ export default function WordPuzzleGame() {
                       </div>
                     );
                   })}
-            </div>
-                              {/* Score popup (currently disabled) */}
-                {/* {letterPopup && (
-                  <span className="absolute inset-0 flex items-center justify-center text-green-600 font-bold animate-float-up" style={{fontSize:'12pt'}}>{letterPopup}</span>
-                )} */}
-            </div>
                 </div>
+              </div>
+              {/* Error message container with fixed height to prevent layout shift */}
+              <div className="h-6 flex items-start justify-center">
+                {error && (
+                  <p 
+                    className="text-sm text-center"
+                    style={{
+                      color: '#c85f31',
+                      animation: 'fadeIn 0.2s ease-in-out'
+                    }}
+                  >
+                    {errorMessage}
+                  </p>
+                )}
+              </div>
+              
+              {/* Submit button - hidden on mobile */}
+              {!isMobile && (
+              <div className="relative inline-block">
+                <button 
+                  onClick={handleSubmit} 
+                  style={{backgroundColor:'#195b7c'}} 
+                  className="text-white px-4 py-2 rounded text-lg disabled:opacity-50" 
+                  disabled={!roundStarted || gameOver || isTransitioning}
+                >
+                  Submit
+                </button>
+              </div>
+              )}
+
+        </div>
+      )}
+
+              {/* Virtual Keyboard - only on mobile; in-flow when scroll needed, fixed otherwise */}
+              {isMobile && roundStarted && !gameOver && (
+                <>
+                  <div style={{ marginTop: needsScrollForKeyboard ? 5 : 15, minHeight: needsScrollForKeyboard ? 5 : 260 }} aria-hidden />
+                  <div
+                    className={isMobile ? "" : "mt-4"}
+                    style={isMobile
+                      ? (needsScrollForKeyboard
+                          ? { padding: '0 23px', paddingBottom: 5, paddingTop: 5 }
+                          : { position: 'fixed', bottom: 30, left: 0, right: 0, padding: '0 23px', paddingBottom: 5, zIndex: 20 })
+                      : { padding: '0 10px' }}
+                  >
+                  {/* Top row: Q-P (10 letters) */}
+                  <div 
+                    className="flex gap-1 mb-1.5 justify-center relative"
+                    style={{ marginLeft: '-30px', marginRight: '-30px', paddingLeft: '30px', paddingRight: '30px' }}
+                    onPointerDown={(e) => {
+                      const row = e.currentTarget;
+                      const rect = row.getBoundingClientRect();
+                      const clickX = e.clientX - rect.left;
+                      const rowWidth = rect.width;
+                      const letters = ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'];
+                      
+                      // Expanded edge areas: 30px left of Q triggers Q, 30px right of P triggers P
+                      // Check edge areas first, before checking if target is a button
+                      if (clickX < 30) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPressedKey('Q');
+                        handleKeyboardLetter('q');
+                        refocusInputSoon();
+                        return;
+                      } else if (clickX > rowWidth - 30) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPressedKey('P');
+                        handleKeyboardLetter('p');
+                        refocusInputSoon();
+                        return;
+                      }
+                      
+                      // If clicked on a button, let the button's handler process it
+                      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                      
+                      // Otherwise, handle clicks in gaps between buttons
+                      const keyWidth = (rowWidth - 20 - 36) / 10; // 20px padding, 36px gaps (9 gaps * 4px)
+                      const keyIndex = Math.min(Math.max(0, Math.floor((clickX - 20) / (keyWidth + 4))), letters.length - 1);
+                      const letter = letters[keyIndex];
+                      if (letter) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPressedKey(letter);
+                        handleKeyboardLetter(letter.toLowerCase());
+                        refocusInputSoon();
+                      }
+                    }}
+                    onPointerUp={(e) => {
+                      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                      setPressedKey(null);
+                    }}
+                    onPointerCancel={(e) => {
+                      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                      setPressedKey(null);
+                    }}
+                  >
+                    {['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'].map((letter) => (
+                      <div key={letter} style={{ position: 'relative', flex: '0 0 calc((100% - 20px - 36px + 40px) / 10)' }}>
+                        <button
+                          type="button"
+                          onPointerDown={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(letter);
+                            handleKeyboardLetter(letter.toLowerCase());
+                            refocusInputSoon();
+                          }}
+                          onPointerUp={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          onPointerCancel={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          className="bg-gray-200 hover:bg-gray-300 active:bg-gray-400 text-gray-800 font-semibold py-4 rounded text-base sm:text-lg transition-colors touch-manipulation"
+                          disabled={!roundStarted || gameOver || isTransitioning}
+                          style={{ 
+                            touchAction: 'manipulation', 
+                            width: '100%',
+                            userSelect: 'none',
+                            WebkitUserSelect: 'none',
+                            WebkitTapHighlightColor: 'transparent',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            minHeight: '54px',
+                            position: 'relative',
+                            zIndex: pressedKey === letter ? 10 : 2,
+                            transform: pressedKey === letter ? 'scale(1.3)' : 'scale(1)',
+                            transition: 'transform 0.1s ease-out'
+                          }}
+                        >
+                          {letter}
+                        </button>
+                        {/* Invisible expanded touch area */}
+                        <div
+                          onPointerDown={(e) => {
+                            // Only handle if target is this div or a child text node, not the button
+                            const target = e.target;
+                            const isButton = target.tagName === 'BUTTON' || target.closest('button');
+                            if (!isButton) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setPressedKey(letter);
+                              handleKeyboardLetter(letter.toLowerCase());
+                              refocusInputSoon();
+                            }
+                          }}
+                          onPointerUp={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          onPointerCancel={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          style={{
+                            position: 'absolute',
+                            top: '-3px',
+                            bottom: '-3px',
+                            left: '-3px',
+                            right: '-3px',
+                            zIndex: 1,
+                            touchAction: 'manipulation'
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Middle row: A-L (9 letters, centered) */}
+                  <div 
+                    className="flex gap-1 mb-1.5 justify-center relative"
+                    style={{ marginLeft: '-40px', marginRight: '-40px', paddingLeft: '40px', paddingRight: '40px' }}
+                    onPointerDown={(e) => {
+                      const row = e.currentTarget;
+                      const rect = row.getBoundingClientRect();
+                      const clickX = e.clientX - rect.left;
+                      const rowWidth = rect.width;
+                      const letters = ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'];
+                      
+                      // Expanded edge areas: 40px left of A triggers A, 40px right of L triggers L
+                      // Check edge areas first, before checking if target is a button
+                      if (clickX < 40) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPressedKey('A');
+                        handleKeyboardLetter('a');
+                        refocusInputSoon();
+                        return;
+                      } else if (clickX > rowWidth - 40) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPressedKey('L');
+                        handleKeyboardLetter('l');
+                        refocusInputSoon();
+                        return;
+                      }
+                      
+                      // If clicked on a button, let the button's handler process it
+                      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                      
+                      // Otherwise, handle clicks in gaps between buttons
+                      const keyWidth = (rowWidth - 20 - 36) / 10; // 20px padding, 36px gaps (9 gaps * 4px)
+                      const keyIndex = Math.min(Math.max(0, Math.floor((clickX - 20) / (keyWidth + 4))), letters.length - 1);
+                      const letter = letters[keyIndex];
+                      if (letter) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPressedKey(letter);
+                        handleKeyboardLetter(letter.toLowerCase());
+                        refocusInputSoon();
+                      }
+                    }}
+                    onPointerUp={(e) => {
+                      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                      setPressedKey(null);
+                    }}
+                    onPointerCancel={(e) => {
+                      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                      setPressedKey(null);
+                    }}
+                  >
+                    {['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'].map((letter) => (
+                      <div key={letter} style={{ position: 'relative', flex: '0 0 calc((100% - 20px - 36px + 40px) / 10)' }}>
+                        <button
+                          type="button"
+                          onPointerDown={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(letter);
+                            handleKeyboardLetter(letter.toLowerCase());
+                            refocusInputSoon();
+                          }}
+                          onPointerUp={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          onPointerCancel={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          className="bg-gray-200 hover:bg-gray-300 active:bg-gray-400 text-gray-800 font-semibold py-4 rounded text-base sm:text-lg transition-colors touch-manipulation"
+                          disabled={!roundStarted || gameOver || isTransitioning}
+                          style={{ 
+                            touchAction: 'manipulation', 
+                            width: '100%',
+                            userSelect: 'none',
+                            WebkitUserSelect: 'none',
+                            WebkitTapHighlightColor: 'transparent',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            minHeight: '54px',
+                            position: 'relative',
+                            zIndex: pressedKey === letter ? 10 : 2,
+                            transform: pressedKey === letter ? 'scale(1.3)' : 'scale(1)',
+                            transition: 'transform 0.1s ease-out'
+                          }}
+                        >
+                          {letter}
+                        </button>
+                        {/* Invisible expanded touch area */}
+                        <div
+                          onPointerDown={(e) => {
+                            // Only handle if target is this div or a child text node, not the button
+                            const target = e.target;
+                            const isButton = target.tagName === 'BUTTON' || target.closest('button');
+                            if (!isButton) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setPressedKey(letter);
+                              handleKeyboardLetter(letter.toLowerCase());
+                              refocusInputSoon();
+                            }
+                          }}
+                          onPointerUp={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          onPointerCancel={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          style={{
+                            position: 'absolute',
+                            top: '-3px',
+                            bottom: '-3px',
+                            left: '-3px',
+                            right: '-3px',
+                            zIndex: 1,
+                            touchAction: 'manipulation'
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Bottom row: Submit + Z-M + Backspace */}
+                  <div 
+                    className="flex gap-1 justify-center relative"
+                    style={{ marginLeft: '-30px', marginRight: '-30px', paddingLeft: '30px', paddingRight: '30px' }}
+                    onPointerDown={(e) => {
+                      if (e.target.tagName === 'BUTTON' || e.target.closest('button') || e.target.closest('div[style*="position: absolute"]')) return;
+                      const row = e.currentTarget;
+                      const rect = row.getBoundingClientRect();
+                      const clickX = e.clientX - rect.left;
+                      const rowWidth = rect.width;
+                      const letterWidth = (rowWidth - 20 - 36 + 40) / 10; // Same as other letter keys
+                      const buttonWidth = letterWidth * 1.8; // Submit and Backspace buttons
+                      const letters = ['Z', 'X', 'C', 'V', 'B', 'N', 'M'];
+                      
+                      // Expanded edge areas: 30px left of Submit triggers Submit, 30px right of Backspace triggers Backspace
+                      // Submit starts at clickX=0, so 30px to left means clickX < 30
+                      // Backspace ends at clickX=rowWidth, so 30px to right means clickX > rowWidth - 30
+                      if (clickX < 30) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPressedKey('submit');
+                        const val = (inputRef.current?.value ?? inputValueRef.current ?? input) ?? '';
+                        handleSubmit(e, val);
+                        refocusInputSoon();
+                      } else if (clickX > rowWidth - 30) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPressedKey('backspace');
+                        handleKeyboardBackspace();
+                        refocusInputSoon();
+                      } else {
+                        const letterAreaStart = buttonWidth + 4;
+                        const relativeX = clickX - letterAreaStart;
+                        const keyIndex = Math.min(Math.max(0, Math.floor(relativeX / (letterWidth + 4))), letters.length - 1);
+                        const letter = letters[keyIndex];
+                        if (letter) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setPressedKey(letter);
+                          handleKeyboardLetter(letter.toLowerCase());
+                          refocusInputSoon();
+                        }
+                      }
+                    }}
+                    onPointerUp={(e) => {
+                      if (e.target.tagName === 'BUTTON' || e.target.closest('button') || e.target.closest('div[style*="position: absolute"]')) return;
+                      setPressedKey(null);
+                    }}
+                    onPointerCancel={(e) => {
+                      if (e.target.tagName === 'BUTTON' || e.target.closest('button') || e.target.closest('div[style*="position: absolute"]')) return;
+                      setPressedKey(null);
+                    }}
+                  >
+                    {/* Submit button - same width as Backspace, wider for padding */}
+                    <div style={{ position: 'relative', flex: '0 0 calc((100% - 20px - 36px + 40px) / 10 * 1.8)', width: 'calc((100% - 20px - 36px + 40px) / 10 * 1.8)', boxSizing: 'border-box' }}>
+                      <button
+                        type="button"
+                        onPointerDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setPressedKey('submit');
+                          const val = (inputRef.current?.value ?? inputValueRef.current ?? input) ?? '';
+                          handleSubmit(e, val);
+                          refocusInputSoon();
+                        }}
+                        onPointerUp={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setPressedKey(null);
+                        }}
+                        onPointerCancel={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setPressedKey(null);
+                        }}
+                        className="text-white rounded text-xs font-semibold disabled:opacity-50 touch-manipulation"
+                        disabled={!roundStarted || gameOver || isTransitioning}
+                        style={{
+                          backgroundColor: '#195b7c',
+                          touchAction: 'manipulation',
+                          width: '100%',
+                          padding: '16px 14px',
+                          userSelect: 'none',
+                          WebkitUserSelect: 'none',
+                          WebkitTapHighlightColor: 'transparent',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          minHeight: '54px',
+                          height: '54px',
+                          position: 'relative',
+                          zIndex: pressedKey === 'submit' ? 10 : 2,
+                          boxSizing: 'border-box',
+                          transform: pressedKey === 'submit' ? 'scale(1.3)' : 'scale(1)',
+                          transition: 'transform 0.1s ease-out'
+                        }}
+                      >
+                        Submit
+                      </button>
+                      {/* Invisible expanded touch area */}
+                      <div
+                        onPointerDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const val = (inputRef.current?.value ?? inputValueRef.current ?? input) ?? '';
+                          handleSubmit(e, val);
+                          refocusInputSoon();
+                        }}
+                        style={{
+                          position: 'absolute',
+                          top: '-3px',
+                          bottom: '-3px',
+                          left: '-3px',
+                          right: '-3px',
+                          zIndex: 1,
+                          touchAction: 'manipulation'
+                        }}
+                      />
+                    </div>
+                    
+                    {/* Z-M letters - same width as Q-P */}
+                    {['Z', 'X', 'C', 'V', 'B', 'N', 'M'].map((letter) => (
+                      <div key={letter} style={{ position: 'relative', flex: '0 0 calc((100% - 20px - 36px + 40px) / 10)' }}>
+                        <button
+                          type="button"
+                          onPointerDown={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(letter);
+                            handleKeyboardLetter(letter.toLowerCase());
+                            refocusInputSoon();
+                          }}
+                          onPointerUp={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          onPointerCancel={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          className="bg-gray-200 hover:bg-gray-300 active:bg-gray-400 text-gray-800 font-semibold py-4 rounded text-base sm:text-lg transition-colors touch-manipulation"
+                          disabled={!roundStarted || gameOver || isTransitioning}
+                          style={{ 
+                            touchAction: 'manipulation', 
+                            width: '100%',
+                            userSelect: 'none',
+                            WebkitUserSelect: 'none',
+                            WebkitTapHighlightColor: 'transparent',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            minHeight: '54px',
+                            position: 'relative',
+                            zIndex: pressedKey === letter ? 10 : 2,
+                            transform: pressedKey === letter ? 'scale(1.3)' : 'scale(1)',
+                            transition: 'transform 0.1s ease-out'
+                          }}
+                        >
+                          {letter}
+                        </button>
+                        {/* Invisible expanded touch area */}
+                        <div
+                          onPointerDown={(e) => {
+                            // Only handle if target is this div or a child text node, not the button
+                            const target = e.target;
+                            const isButton = target.tagName === 'BUTTON' || target.closest('button');
+                            if (!isButton) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setPressedKey(letter);
+                              handleKeyboardLetter(letter.toLowerCase());
+                              refocusInputSoon();
+                            }
+                          }}
+                          onPointerUp={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          onPointerCancel={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPressedKey(null);
+                          }}
+                          style={{
+                            position: 'absolute',
+                            top: '-3px',
+                            bottom: '-3px',
+                            left: '-3px',
+                            right: '-3px',
+                            zIndex: 1,
+                            touchAction: 'manipulation'
+                          }}
+                        />
+                      </div>
+                    ))}
+                    
+                    {/* Backspace button - same width as Submit */}
+                    <div style={{ position: 'relative', flex: '0 0 calc((100% - 20px - 36px + 40px) / 10 * 1.8)', width: 'calc((100% - 20px - 36px + 40px) / 10 * 1.8)', boxSizing: 'border-box' }}>
+                      <button
+                        type="button"
+                        onPointerDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setPressedKey('backspace');
+                          handleKeyboardBackspace();
+                          refocusInputSoon();
+                          
+                          backspaceHoldTimeoutRef.current = setTimeout(() => {
+                            backspaceHoldIntervalRef.current = setInterval(() => {
+                              handleKeyboardBackspace();
+                            }, 50);
+                          }, 300);
+                        }}
+                        onPointerUp={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setPressedKey(null);
+                          if (backspaceHoldTimeoutRef.current) {
+                            clearTimeout(backspaceHoldTimeoutRef.current);
+                            backspaceHoldTimeoutRef.current = null;
+                          }
+                          if (backspaceHoldIntervalRef.current) {
+                            clearInterval(backspaceHoldIntervalRef.current);
+                            backspaceHoldIntervalRef.current = null;
+                          }
+                        }}
+                        onPointerCancel={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setPressedKey(null);
+                          if (backspaceHoldTimeoutRef.current) {
+                            clearTimeout(backspaceHoldTimeoutRef.current);
+                            backspaceHoldTimeoutRef.current = null;
+                          }
+                          if (backspaceHoldIntervalRef.current) {
+                            clearInterval(backspaceHoldIntervalRef.current);
+                            backspaceHoldIntervalRef.current = null;
+                          }
+                        }}
+                        className="bg-gray-200 hover:bg-gray-300 active:bg-gray-400 text-gray-800 font-semibold rounded text-base disabled:opacity-50 touch-manipulation"
+                        disabled={!roundStarted || gameOver || isTransitioning}
+                        style={{ 
+                          touchAction: 'manipulation', 
+                          width: '100%',
+                          padding: '16px 14px',
+                          userSelect: 'none',
+                          WebkitUserSelect: 'none',
+                          WebkitTapHighlightColor: 'transparent',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          minHeight: '54px',
+                          height: '54px',
+                          position: 'relative',
+                          zIndex: pressedKey === 'backspace' ? 10 : 2,
+                          boxSizing: 'border-box',
+                          transform: pressedKey === 'backspace' ? 'scale(1.3)' : 'scale(1)',
+                          transition: 'transform 0.1s ease-out'
+                        }}
+                      >
+                        ⌫
+                      </button>
+                      {/* Invisible expanded touch area */}
+                      <div
+                        onPointerDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleKeyboardBackspace();
+                          refocusInputSoon();
+                          
+                          backspaceHoldTimeoutRef.current = setTimeout(() => {
+                            backspaceHoldIntervalRef.current = setInterval(() => {
+                              handleKeyboardBackspace();
+                            }, 50);
+                          }, 300);
+                        }}
+                        onPointerUp={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (backspaceHoldTimeoutRef.current) {
+                            clearTimeout(backspaceHoldTimeoutRef.current);
+                            backspaceHoldTimeoutRef.current = null;
+                          }
+                          if (backspaceHoldIntervalRef.current) {
+                            clearInterval(backspaceHoldIntervalRef.current);
+                            backspaceHoldIntervalRef.current = null;
+                          }
+                        }}
+                        onPointerCancel={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (backspaceHoldTimeoutRef.current) {
+                            clearTimeout(backspaceHoldTimeoutRef.current);
+                            backspaceHoldTimeoutRef.current = null;
+                          }
+                          if (backspaceHoldIntervalRef.current) {
+                            clearInterval(backspaceHoldIntervalRef.current);
+                            backspaceHoldIntervalRef.current = null;
+                          }
+                        }}
+                        style={{
+                          position: 'absolute',
+                          top: '-3px',
+                          bottom: '-3px',
+                          left: '-3px',
+                          right: '-3px',
+                          zIndex: 1,
+                          touchAction: 'manipulation'
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+                </>
               )}
               
           {/* Game Controls */}
           <div className="flex flex-col items-center space-y-3 fade-in">
-            {gameOver ? (
+            {gameOver && (
               <button onClick={resetGame} className="bg-white border border-gray-400 text-black w-52 h-16 text-xl font-semibold rounded">NEW GAME</button>
-            ) : (
-              <button onClick={async () => {
-                // Record this as a played game but not a won game
-                if (roundStarted && !gameOver) {
-                  const newStats = { ...stats };
-                  newStats.gamesPlayed = (newStats.gamesPlayed || 0) + 1;
-                  // Reset streak since game wasn't completed
-                  newStats.currentStreak = 0;
-                  setStats(newStats);
-                  localStorage.setItem('sequenceGameTimedStats', JSON.stringify(newStats));
-                }
-                
-                // Add unsolved levels to results for display
-                if (roundStarted && !gameOver) {
-                  const unsolvedLevels = [];
-                  
-                  // Add current level if it hasn't been solved
-                  if (levelResults.length < currentLevel) {
-                    unsolvedLevels.push({
-                      letters: letters,
-                      word: null,
-                      time: gameTime,
-                      gaveUp: true
-                    });
-                  }
-                  
-                  // Add any remaining levels that weren't reached
-                  for (let i = currentLevel + 1; i <= 3; i++) {
-                    // Use pre-generated letters for remaining levels
-                    const levelLetters = allLevelLetters[i - 1];
-                    unsolvedLevels.push({
-                      letters: levelLetters,
-                      word: null,
-                      time: gameTime,
-                      gaveUp: true
-                    });
-                  }
-                  
-                  setLevelResults(prev => [...prev, ...unsolvedLevels]);
-                }
-                
-                setGameOver(true);
-                // Clear any current round time to prevent highlighting
-                localStorage.removeItem('currentRoundTimeTimed');
-                
-                // Show stats modal automatically after a brief delay
-                setTimeout(() => setShowStats(true), 500);
-              }} className="bg-white border border-gray-400 text-black w-52 h-16 text-xl font-semibold rounded">END GAME</button>
             )}
           </div>
         </>
@@ -843,7 +1967,7 @@ export default function WordPuzzleGame() {
 
       {/* Statistics Modal */}
       {showStats && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] modal-fade-in" style={{ top: '-100vh', left: '-100vw', right: '-100vw', bottom: '-100vh', width: '300vw', height: '300vh' }}>
+        <div className="fixed top-0 left-0 right-0 bottom-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] modal-fade-in" style={{ width: '100vw', height: '100vh', margin: 0, padding: 0 }}>
           <div className="bg-white rounded-lg p-4 sm:p-6 w-full max-w-xs sm:max-w-sm md:max-w-md mx-4 sm:mx-6 max-h-[85vh] sm:max-h-[90vh] overflow-y-auto">
             {/* Header */}
             <div className="flex justify-between items-center mb-4 sm:mb-6">
@@ -870,8 +1994,8 @@ export default function WordPuzzleGame() {
                 {levelResults.every(result => !result.gaveUp) ? (
                   <div>
                     <div className="text-lg font-semibold text-green-700 mb-2">Congratulations!</div>
-                    <div className="text-sm text-gray-600 mb-1">You completed this Sequence in:</div>
-                    <div className="text-2xl font-bold text-green-700">{formatTime(gameTime)}</div>
+                    <div className="text-sm text-gray-600 mb-1">You completed this Stringlish in:</div>
+                    <div className="text-2xl font-bold text-green-700">{formatTime(gameOver && finalGameTimeRef.current != null ? finalGameTimeRef.current : gameTime)}</div>
                   </div>
                 ) : (
                   <div className="text-lg font-semibold text-gray-600">Better Luck Next Time!</div>
@@ -951,21 +2075,15 @@ export default function WordPuzzleGame() {
 
       {/* Rules Modal */}
       {showRules && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] modal-fade-in" style={{ top: '-100vh', left: '-100vw', right: '-100vw', bottom: '-100vh', width: '300vw', height: '300vh' }}>
+        <div className="fixed top-0 left-0 right-0 bottom-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] modal-fade-in" style={{ width: '100vw', height: '100vh', margin: 0, padding: 0 }}>
           <div
-            className="bg-white rounded-lg p-4 sm:p-6 w-full max-w-xs sm:max-w-sm md:max-w-md mx-4 sm:mx-6"
+            className="bg-white rounded-lg p-4 sm:p-6 w-full max-w-xs sm:max-w-sm md:max-w-md mx-4 sm:mx-6 overflow-y-auto"
             style={{
               maxHeight: '90vh',
-              overflow: 'visible',
               display: 'flex',
               flexDirection: 'column',
-              justifyContent: 'center',
               boxSizing: 'border-box',
               textAlign: 'left',
-              // Responsive scaling for mobile
-              transform: 'scale(1)',
-              ...(window.innerWidth < 400 ? { transform: 'scale(0.92)' } : {}),
-              ...(window.innerHeight < 600 ? { maxHeight: '80vh', transform: 'scale(0.92)' } : {}),
             }}
           >
             {/* Header */}
@@ -979,11 +2097,11 @@ export default function WordPuzzleGame() {
               </button>
             </div>
             <div className="mb-4 text-base font-medium">Use the provided letters to create words.</div>
-            <ul className="mb-3 text-sm list-disc pl-5 space-y-1">
+            <ul className="mb-3 text-xs list-disc pl-5 space-y-1">
               <li>Provided letters must be used in the order they appear.</li>
               <li>There can be letters before, after and between the provided letters, as long as they remain in order.</li>
-              <li>Words must contain at least 5 letters.</li>
-              <li>Complete all 3 levels to complete the Sequence.</li>
+              <li>Words must contain at least 5 letters and cannot be proper nouns or names.</li>
+              <li>Complete all 3 levels to win!</li>
             </ul>
             <div className="mb-1 mt-2 text-base font-semibold">Example</div>
             <div className="mb-1 text-xs font-medium">Provided Letters:</div>
@@ -1007,7 +2125,7 @@ export default function WordPuzzleGame() {
               <div style={{ width: 24, height: 24, background: '#1c6d2a', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 600, fontSize: '0.95rem', boxShadow: '0 1px 3px rgba(0,0,0,0.10)' }}>N</div>
             </div>
             <div className="flex items-center mb-3 text-xs" style={{ color: '#1c6d2a' }}>
-              <FontAwesomeIcon icon={faCheckCircle} className="mr-1" /> Valid word—nonconsecutive provided letters
+              <FontAwesomeIcon icon={faCheckCircle} className="mr-1" /> Valid word—nonconsecutive provided letters.
             </div>
             {/* LINK example */}
             <div className="flex items-center space-x-1 mb-1">
@@ -1090,6 +2208,14 @@ export default function WordPuzzleGame() {
           from { opacity: 0; }
           to { opacity: 1; }
         }
+        @keyframes keyPop {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.15); }
+          100% { transform: scale(1); }
+        }
+        .key-pop-animation {
+          animation: keyPop 0.15s ease-out;
+        }
         
         @keyframes fadeOut {
           from { opacity: 1; }
@@ -1106,12 +2232,34 @@ export default function WordPuzzleGame() {
             transform: translateY(0);
           }
         }
+        
+        @keyframes hintReveal {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.2); }
+          100% { transform: scale(1); }
+        }
+        .hint-reveal-anim {
+          animation: hintReveal 0.3s ease-out;
+        }
+        @keyframes hintReadyPop {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.1); }
+          100% { transform: scale(1); }
+        }
+        .hint-ready-pop {
+          animation: hintReadyPop 0.2s ease-out;
+        }
       `}</style>
       
       {/* Footer */}
-      <footer className="text-center py-4 mt-8">
-        <p className="text-gray-500 italic text-sm">© 2025 Davis English. All Rights Reserved.</p>
+      <footer
+        className={`text-center ${isMobile ? "" : "py-4 mt-8"}`}
+        style={isMobile ? { position: 'fixed', bottom: 0, left: 0, right: 0, paddingTop: 5, paddingBottom: 5, zIndex: 15, background: 'white' } : undefined}
+      >
+        <p className="text-gray-500 italic text-sm">© 2026 Davis English. All Rights Reserved.</p>
       </footer>
+      </div>
+      </div>
     </div>
   );
 }
