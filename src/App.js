@@ -326,7 +326,7 @@ export default function WordPuzzleGame() {
   const lastKeyPressRef = useRef({ key: null, time: 0 });
   const isSubmittingRef = useRef(false);
   const contentAboveKeyboardRef = useRef(null);
-  const KEYBOARD_BOTTOM_OFFSET = 30;
+  const KEYBOARD_BOTTOM_OFFSET = 10;
   const KEYBOARD_HEIGHT_ESTIMATE = 280;
   const KEYBOARD_GAP_MIN = 0;
 
@@ -1370,7 +1370,7 @@ export default function WordPuzzleGame() {
                     style={isMobile
                       ? (needsScrollForKeyboard
                           ? { padding: '0 23px', paddingBottom: 5, paddingTop: 5 }
-                          : { position: 'fixed', bottom: 30, left: 0, right: 0, padding: '0 23px', paddingBottom: 5, zIndex: 20 })
+                          : { position: 'fixed', bottom: 10, left: 0, right: 0, padding: '0 23px', paddingBottom: 10, zIndex: 20 })
                       : { padding: '0 10px' }}
                   >
                   {/* Top row: Q-P (10 letters) */}
@@ -2251,13 +2251,15 @@ export default function WordPuzzleGame() {
         }
       `}</style>
       
-      {/* Footer */}
-      <footer
-        className={`text-center ${isMobile ? "" : "py-4 mt-8"}`}
-        style={isMobile ? { position: 'fixed', bottom: 0, left: 0, right: 0, paddingTop: 5, paddingBottom: 5, zIndex: 15, background: 'white' } : undefined}
-      >
-        <p className="text-gray-500 italic text-sm">© 2026 Davis English. All Rights Reserved.</p>
-      </footer>
+      {/* Footer - hidden on mobile during gameplay when keyboard is shown */}
+      {!(isMobile && roundStarted && !gameOver) && (
+        <footer
+          className={`text-center ${isMobile ? "" : "py-4 mt-8"}`}
+          style={isMobile ? { position: 'fixed', bottom: 0, left: 0, right: 0, paddingTop: 5, paddingBottom: 5, zIndex: 15, background: 'white' } : undefined}
+        >
+          <p className="text-gray-500 italic text-sm">© 2026 Davis English. All Rights Reserved.</p>
+        </footer>
+      )}
       </div>
       </div>
     </div>
