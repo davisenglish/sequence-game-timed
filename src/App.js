@@ -6,7 +6,7 @@
 // Storage Keys: 'sequenceGameTimedStats' and 'currentRoundTimeTimed'
 import React, { useState, useEffect, useRef } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faStopwatch, faCircleInfo, faChartSimple, faCheckCircle, faTimesCircle, faCircleQuestion, faHouseChimney } from '@fortawesome/free-solid-svg-icons';
+import { faStopwatch, faCircleInfo, faChartSimple, faCheckCircle, faTimesCircle, faCircleQuestion, faHouseChimney, faShareNodes } from '@fortawesome/free-solid-svg-icons';
 import words from 'an-array-of-english-words';
 
 // Preprocess the word list once for performance, excluding certain suffixes
@@ -2068,6 +2068,46 @@ export default function WordPuzzleGame() {
                   );
                 })}
               </div>
+            </div>
+
+            {/* Share button - same green as gameplay square (#1c6d2a) */}
+            <div className="mt-4 pt-3 border-t border-gray-200">
+              <button
+                type="button"
+                onClick={async () => {
+                  const d = new Date();
+                  const mm = String(d.getMonth() + 1).padStart(2, '0');
+                  const dd = String(d.getDate()).padStart(2, '0');
+                  const yy = String(d.getFullYear()).slice(-2);
+                  const dateStr = `${mm}/${dd}/${yy}`;
+                  const completed = levelResults.length > 0 && levelResults.every(r => !r.gaveUp);
+                  const lastRoundTime = finalGameTimeRef.current != null
+                    ? finalGameTimeRef.current
+                    : parseInt(localStorage.getItem('currentRoundTimeTimed') || '0', 10);
+                  const text = completed && lastRoundTime > 0
+                    ? `Stringlish, ${dateStr} - Time: ${formatTime(lastRoundTime)}. See if you can beat me at https://www.stringlish.com/`
+                    : `Stringlish, ${dateStr} - Didn't quite get it this time. See if you can beat me at https://www.stringlish.com/`;
+                  if (typeof navigator.share === 'function') {
+                    try {
+                      await navigator.share({ text });
+                    } catch (err) {
+                      if (err.name !== 'AbortError') {
+                        try {
+                          await navigator.clipboard.writeText(text);
+                        } catch (_) {}
+                      }
+                    }
+                  } else {
+                    try {
+                      await navigator.clipboard.writeText(text);
+                    } catch (_) {}
+                  }
+                }}
+                className="w-full py-3 px-4 rounded-lg font-semibold text-white flex items-center justify-center gap-2"
+                style={{ backgroundColor: '#1c6d2a' }}
+              >
+                Share <span className="ml-2"><FontAwesomeIcon icon={faShareNodes} /></span>
+              </button>
             </div>
           </div>
         </div>
