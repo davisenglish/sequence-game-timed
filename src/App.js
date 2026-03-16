@@ -156,6 +156,11 @@ function isSequential(word, letters) {
   return false;
 }
 
+function toTitleCase(str) {
+  if (!str || typeof str !== 'string') return str;
+  return str.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 async function isValidWord(word) {
   // Reject hyphenated words
   if (word.includes('-')) return false;
@@ -272,7 +277,7 @@ function PossibleAnswers({ letters, max = 3, ensureIncluded }) {
   return (
     <div className="space-y-1">
       {answers.map((word, idx) => (
-        <div key={idx}>{word}</div>
+        <div key={idx}>{toTitleCase(word)}</div>
       ))}
     </div>
   );
@@ -284,6 +289,7 @@ export default function WordPuzzleGame() {
   const [allLevelLetters, setAllLevelLetters] = useState([]); // Store all 3 sets of letters
   const [roundStarted, setRoundStarted] = useState(false);
   const [input, setInput] = useState('');
+  const [inputFontSizePx, setInputFontSizePx] = useState(30);
   const [levelResults, setLevelResults] = useState([]); // [{ letters, word, time, gaveUp }]
   const [error, setError] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -291,6 +297,7 @@ export default function WordPuzzleGame() {
   const [gameOver, setGameOver] = useState(false);
   const [letterPopup, setLetterPopup] = useState(null);
   const [showRevealAnimation, setShowRevealAnimation] = useState(false);
+  const [revealAnimationPlayedThisRound, setRevealAnimationPlayedThisRound] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -304,6 +311,16 @@ export default function WordPuzzleGame() {
     averageTimes: []
   });
   const [showRules, setShowRules] = useState(false);
+  const [rulesModalClosing, setRulesModalClosing] = useState(false);
+  const [statsModalClosing, setStatsModalClosing] = useState(false);
+  const [showRulesOnStart, setShowRulesOnStart] = useState(() => {
+    try {
+      const stored = localStorage.getItem('sequenceGameTimedShowRulesOnStart');
+      return stored !== 'false';
+    } catch (_) {
+      return true;
+    }
+  });
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [pressedKey, setPressedKey] = useState(null);
   const [hintWord, setHintWord] = useState(null);
@@ -314,16 +331,23 @@ export default function WordPuzzleGame() {
   const [hintReadyPop, setHintReadyPop] = useState(false);
   const hintUnlockTimeoutRef = useRef(null);
   const hintFillIntervalRef = useRef(null);
+  /** True after the 30s hint timer has been started this level; prevents starting while rules modal is open at round start. */
+  const hintTimerStartedThisRoundRef = useRef(false);
   const startTimeRef = useRef(null);
   const inputRef = useRef(null);
+  const inputContainerRef = useRef(null);
+  const inputMeasureRef = useRef(null);
   /** When the round ends (win), this is the single source of truth for the final time (avoids timer race). */
   const finalGameTimeRef = useRef(null);
   /** Tracks current timer value for use after async work (e.g. isValidWord); keeps modal time in sync with gameplay display. */
   const gameTimeRef = useRef(0);
+  /** True after the user closes the rules modal the first time this round; reopening rules then does not pause the timer. */
+  const rulesDismissedOnceRef = useRef(false);
   const inputValueRef = useRef(''); // on mobile, stays in sync with input so Submit sees latest value
   const backspaceHoldTimeoutRef = useRef(null);
   const backspaceHoldIntervalRef = useRef(null);
   const lastKeyPressRef = useRef({ key: null, time: 0 });
+  const handleKeyboardLetterRef = useRef(null);
   const isSubmittingRef = useRef(false);
   const contentAboveKeyboardRef = useRef(null);
   const KEYBOARD_BOTTOM_OFFSET = 10;
@@ -415,6 +439,7 @@ export default function WordPuzzleGame() {
 
   useEffect(() => {
     if (!roundStarted || gameOver) return;
+    if (showRules && !rulesDismissedOnceRef.current) return;
 
     const timer = setInterval(() => {
       setGameTime(prev => {
@@ -425,7 +450,7 @@ export default function WordPuzzleGame() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [roundStarted, gameOver]);
+  }, [roundStarted, gameOver, showRules]);
 
   const startHintFillTimer = () => {
     setHintAvailable(false);
@@ -433,25 +458,22 @@ export default function WordPuzzleGame() {
     setHintReadyPop(false);
     if (hintUnlockTimeoutRef.current) clearTimeout(hintUnlockTimeoutRef.current);
     if (hintFillIntervalRef.current) clearInterval(hintFillIntervalRef.current);
+    let tickCount = 0;
     hintFillIntervalRef.current = setInterval(() => {
-      setHintFillProgress((prev) => {
-        if (prev >= 99) {
-          if (hintFillIntervalRef.current) {
-            clearInterval(hintFillIntervalRef.current);
-            hintFillIntervalRef.current = null;
-          }
-          return 100;
+      tickCount += 1;
+      if (tickCount >= 100) {
+        if (hintFillIntervalRef.current) {
+          clearInterval(hintFillIntervalRef.current);
+          hintFillIntervalRef.current = null;
         }
-        return prev + 1;
-      });
+        setHintFillProgress(100);
+        setHintAvailable(true);
+        setHintReadyPop(true);
+        setTimeout(() => setHintReadyPop(false), 200);
+        return;
+      }
+      setHintFillProgress((prev) => prev + 1);
     }, 300);
-    hintUnlockTimeoutRef.current = setTimeout(() => {
-      hintUnlockTimeoutRef.current = null;
-      setHintFillProgress(100);
-      setHintAvailable(true);
-      setHintReadyPop(true);
-      setTimeout(() => setHintReadyPop(false), 200);
-    }, 30000);
   };
 
   const clearHintTimers = () => {
@@ -465,60 +487,118 @@ export default function WordPuzzleGame() {
     }
   };
 
-  // Reset hint when triplet/level changes; start 30s fill for this round
+  // Reset hint when triplet/level changes so next level gets a fresh 30s timer
   useEffect(() => {
     setHintWord(null);
     setHintRevealCount(0);
     setHintAvailable(false);
     setHintFillProgress(0);
     clearHintTimers();
-    if (roundStarted && !gameOver && letters) {
-      startHintFillTimer();
-    }
+    hintTimerStartedThisRoundRef.current = false;
     return clearHintTimers;
   }, [letters]);
 
-  // When game first starts (roundStarted), start the 30s hint fill for level 1
+  // Hint: start 30s timer when game timer would run (after rules closed first time). Reopening rules mid-game does not pause hint.
   useEffect(() => {
-    if (!roundStarted || gameOver || !letters) return;
-    startHintFillTimer();
-    return clearHintTimers;
-  }, [roundStarted, gameOver]);
+    if (!roundStarted || gameOver || !letters) {
+      setHintAvailable(false);
+      setHintFillProgress(0);
+      clearHintTimers();
+      hintTimerStartedThisRoundRef.current = false;
+      if (!roundStarted || !letters) setHintWord(null);
+      return clearHintTimers;
+    }
+    if ((rulesDismissedOnceRef.current || !showRules) && !hintTimerStartedThisRoundRef.current) {
+      startHintFillTimer();
+      hintTimerStartedThisRoundRef.current = true;
+    }
+    return () => {};
+  }, [roundStarted, gameOver, letters, showRules]);
 
   // Keep inputValueRef in sync with input state so mobile Submit always has a source of truth
   useEffect(() => {
     inputValueRef.current = input;
   }, [input]);
 
-  // Ensure input field gets focus when game starts and after transitions
+  // Ensure input field gets focus when game is active and rules are not covering it (so user can always type)
   useEffect(() => {
-    if (roundStarted && !gameOver && !isTransitioning && inputRef.current) {
-      // Small delay to ensure the input field is fully rendered
+    if (roundStarted && !gameOver && !isTransitioning && !showRules && inputRef.current) {
       const focusTimer = setTimeout(() => {
         if (inputRef.current) {
           inputRef.current.focus();
+          const pos = inputRef.current.value.length;
+          inputRef.current.setSelectionRange(pos, pos);
         }
       }, 100);
-      
       return () => clearTimeout(focusTimer);
     }
-  }, [roundStarted, gameOver, isTransitioning]);
+  }, [roundStarted, gameOver, isTransitioning, showRules]);
+
+  // Scale input font down only once text width exceeds ~15 letters (container-based max width)
+  const measureInputFontSize = () => {
+    if (!input) {
+      setInputFontSizePx(30);
+      return;
+    }
+    const container = inputContainerRef.current;
+    const measure = inputMeasureRef.current;
+    if (!container || !measure) return;
+    const containerWidth = container.clientWidth;
+    const textWidthAt30 = measure.offsetWidth;
+    const maxContentWidth = Math.min(280, containerWidth * 0.85);
+    if (textWidthAt30 > maxContentWidth && textWidthAt30 > 0) {
+      const scaled = (30 * maxContentWidth) / textWidthAt30;
+      setInputFontSizePx(Math.max(12, scaled));
+    } else {
+      setInputFontSizePx(30);
+    }
+  };
+  useEffect(() => {
+    if (!input) {
+      setInputFontSizePx(30);
+      return;
+    }
+    const raf = requestAnimationFrame(measureInputFontSize);
+    const onResize = () => requestAnimationFrame(measureInputFontSize);
+    window.addEventListener('resize', onResize);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [input]);
 
   const handleBegin = () => {
     setShowRevealAnimation(true);
+    setRevealAnimationPlayedThisRound(false);
     setError(false);
     setErrorMessage('');
     // Start the game after the reveal animation completes
     setTimeout(() => {
-    setRoundStarted(true);
-    startTimeRef.current = performance.now();
-      // Focus the input field when the game starts
+      rulesDismissedOnceRef.current = false;
+      setRoundStarted(true);
+      if (showRulesOnStart) {
+        setShowRules(true);
+      } else {
+        rulesDismissedOnceRef.current = true;
+        // No rules modal: letters appear immediately with reveal; mark animation played after duration
+        setTimeout(() => setRevealAnimationPlayedThisRound(true), 500);
+      }
+      startTimeRef.current = performance.now();
+      // Focus the input field when the game starts (after they close rules)
       setTimeout(() => {
         if (inputRef.current) {
           inputRef.current.focus();
         }
       }, 200); // Slightly longer delay to ensure the input field is fully rendered
     }, 500); // Match the animation duration
+  };
+
+  const toggleShowRulesOnStart = () => {
+    const next = !showRulesOnStart;
+    setShowRulesOnStart(next);
+    try {
+      localStorage.setItem('sequenceGameTimedShowRulesOnStart', String(next));
+    } catch (_) {}
   };
 
     const handleSubmit = async (e, valueFromMobile) => {
@@ -591,6 +671,7 @@ export default function WordPuzzleGame() {
     localStorage.removeItem('currentRoundTimeTimed');
     finalGameTimeRef.current = null;
     gameTimeRef.current = 0;
+    rulesDismissedOnceRef.current = false;
 
     setRoundStarted(false);
     setShowRevealAnimation(false);
@@ -667,61 +748,63 @@ export default function WordPuzzleGame() {
   const handleInputChange = (e) => {
     if (!roundStarted || gameOver || isTransitioning) return;
     const v = e.target.value;
-    inputValueRef.current = v;
-    setInput(v);
-    if (error) { setError(false); setErrorMessage(''); }
+    const lettersOnly = v.replace(/[^a-zA-Z]/g, '');
+    const cleaned = lettersOnly.slice(0, 45);
+    if (v !== lettersOnly) {
+      setError(true);
+      setErrorMessage('Letters only, please');
+    } else {
+      setError(false);
+      setErrorMessage('');
+    }
+    inputValueRef.current = cleaned;
+    setInput(cleaned);
   };
 
   // Virtual keyboard handlers
   const handleKeyboardLetter = (letter) => {
     if (!roundStarted || gameOver || isTransitioning) return;
-    
-    // Prevent duplicate rapid key presses (debounce)
-    const now = Date.now();
-    if (lastKeyPressRef.current.key === letter && now - lastKeyPressRef.current.time < 100) {
-      return; // Ignore duplicate press within 100ms
+    if (!/^[a-zA-Z]$/.test(letter)) {
+      setError(true);
+      setErrorMessage('Letters only, please');
+      return;
     }
+    const now = Date.now();
+    if (lastKeyPressRef.current.key === letter && now - lastKeyPressRef.current.time < 100) return;
     lastKeyPressRef.current = { key: letter, time: now };
-    
-    const input = inputRef.current;
-    if (input) {
-      // Ensure input has focus
-      if (document.activeElement !== input) {
-        input.focus();
-      }
-      
-      let start = input.selectionStart;
-      const end = input.selectionEnd || 0;
-      const currentValue = input.value;
-      
-      // If cursor is at start and field has text, or if input lost focus, move to end
-      if (start === 0 && currentValue.length > 0 && document.activeElement !== input) {
-        start = currentValue.length;
-      } else if (start === null || start === undefined) {
-        start = currentValue.length;
-      }
-      
-      // Replace selected text or insert at cursor position
+
+    const inputEl = inputRef.current;
+    if (inputEl) {
+      if (document.activeElement !== inputEl) inputEl.focus();
+      let start = inputEl.selectionStart;
+      const end = inputEl.selectionEnd || 0;
+      const currentValue = inputEl.value;
+      if (start === 0 && currentValue.length > 0 && document.activeElement !== inputEl) start = currentValue.length;
+      else if (start === null || start === undefined) start = currentValue.length;
       const newValue = currentValue.slice(0, start) + letter + currentValue.slice(end);
+      if (newValue.length > 45) {
+        setError(true);
+        setErrorMessage('Character limit reached (45)');
+        return;
+      }
       inputValueRef.current = newValue;
       setInput(newValue);
-      
-      // Set cursor position after the inserted letter
       setTimeout(() => {
-        if (inputRef.current) {
-          const newPosition = start + 1;
-          inputRef.current.setSelectionRange(newPosition, newPosition);
-        }
+        if (inputRef.current) inputRef.current.setSelectionRange(start + 1, start + 1);
       }, 0);
     } else {
-      // Fallback if input ref is not available
       const next = (inputValueRef.current || '') + letter;
+      if (next.length > 45) {
+        setError(true);
+        setErrorMessage('Character limit reached (45)');
+        return;
+      }
       inputValueRef.current = next;
       setInput(next);
     }
-    
     if (error) { setError(false); setErrorMessage(''); }
   };
+  handleKeyboardLetterRef.current = handleKeyboardLetter;
 
   const handleKeyboardBackspace = () => {
     if (!roundStarted || gameOver || isTransitioning) return;
@@ -767,9 +850,8 @@ export default function WordPuzzleGame() {
   // We call this after virtual-key presses.
   const refocusInputSoon = () => {
     if (inputRef.current) {
-      // Use rAF so it runs after the pointer event completes.
       requestAnimationFrame(() => {
-        if (inputRef.current && roundStarted && !gameOver && !isTransitioning) {
+        if (inputRef.current && roundStarted && !gameOver && !isTransitioning && !showRules) {
           inputRef.current.focus();
           // Always position cursor at end when typing starts
           const pos = inputRef.current.value.length;
@@ -790,6 +872,7 @@ export default function WordPuzzleGame() {
 
   // On mobile, suppress the native keyboard by making the input readOnly + inputMode="none",
   // but still allow physical keyboards (e.g., bluetooth) by listening for keydown events.
+  // Use handleKeyboardLetterRef so the latest handler runs (error clearing, 45-char limit, etc.).
   useEffect(() => {
     if (!isMobile || !roundStarted || gameOver) return;
 
@@ -798,8 +881,9 @@ export default function WordPuzzleGame() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       if (e.key === 'Enter') {
+        if (e.repeat) return;
         e.preventDefault();
-        const val = (inputRef.current?.value ?? inputValueRef.current) ?? '';
+        const val = (inputValueRef.current ?? inputRef.current?.value ?? input ?? '') || '';
         handleSubmit(e, val);
         return;
       }
@@ -810,10 +894,13 @@ export default function WordPuzzleGame() {
         return;
       }
 
-      // Letters only
       if (/^[a-zA-Z]$/.test(e.key)) {
         e.preventDefault();
-        handleKeyboardLetter(e.key.toLowerCase());
+        handleKeyboardLetterRef.current?.(e.key);
+      } else if (e.key.length === 1) {
+        e.preventDefault();
+        setError(true);
+        setErrorMessage('Letters only, please');
       }
     };
 
@@ -1079,7 +1166,7 @@ export default function WordPuzzleGame() {
                       </div>
                     ) : (
                       <div className="text-sm text-green-800 font-medium">
-                        {result.word.toUpperCase()}
+                        {toTitleCase(result.word)}
                       </div>
                     )}
                   </div>
@@ -1088,11 +1175,11 @@ export default function WordPuzzleGame() {
             </div>
           )}
 
-          {/* Current Letters Display */}
-          {!gameOver && (
+          {/* Current Letters Display - hidden while rules modal is open to avoid flash before modal appears */}
+          {!gameOver && !showRules && (
             <div className={`flex justify-center space-x-3 items-center transition-opacity duration-300 ${
               isTransitioning ? 'opacity-0' : 'opacity-100'
-            }`}>
+            } ${showRevealAnimation && !revealAnimationPlayedThisRound ? 'reveal-content' : ''}`}>
           {letters.split('').map((char, idx) => {
             const { shape, color } = shapes[idx];
             const common = { 
@@ -1153,181 +1240,192 @@ export default function WordPuzzleGame() {
       )}
 
           {/* Input Section */}
-          {roundStarted && !gameOver && (
-            <div ref={contentAboveKeyboardRef} className="space-y-4 fade-in">
+          {roundStarted && !gameOver && !showRules && (
+            <div ref={contentAboveKeyboardRef} className={`space-y-4 ${showRevealAnimation && !revealAnimationPlayedThisRound ? 'reveal-content' : ''}`}>
               <div
-                className={`flex border rounded overflow-hidden ${error ? 'border-[#c85f31]' : 'border-gray-300'}`}
+                ref={inputContainerRef}
+                className={`border-0 border-b rounded-none ${error ? 'border-red-600' : 'border-gray-200'}`}
               >
-              <div
-                className={`flex-1 min-w-0 ${hintRevealAnimating ? 'hint-reveal-anim' : ''}`}
-                style={{ transformOrigin: 'left center' }}
-              >
-              <input 
-                ref={inputRef}
-                type="text" 
-                value={input} 
-                onChange={handleInputChange}
-                className="border-0 rounded-none px-4 py-2 w-full text-lg focus:ring-0 focus:outline-none"
-                style={{
-                  ...(error ? {
-                    color: '#c85f31',
-                    caretColor: '#c85f31'
-                  } : {
-                    caretColor: '#000000'
-                  }),
-                  ...(isMobile ? {
-                    WebkitTapHighlightColor: 'transparent',
-                    cursor: 'text'
-                  } : {
-                    cursor: 'text'
-                  })
-                }}
-                placeholder="Enter word..." 
-                disabled={!roundStarted || gameOver || isTransitioning}
-                readOnly={isMobile}
-                inputMode={isMobile ? 'none' : undefined}
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="none"
-                spellCheck={false}
-                onTouchStart={(e) => {
-                  // On mobile, ensure cursor is visible when tapping
-                  if (isMobile && inputRef.current) {
-                    e.preventDefault();
-                    const input = inputRef.current;
-                    // Temporarily remove readonly to show cursor, then restore
-                    input.removeAttribute('readonly');
-                    input.focus();
-                    const pos = input.value.length;
-                    input.setSelectionRange(pos, pos);
-                    // Restore readonly after cursor is shown
-                    setTimeout(() => {
-                      input.setAttribute('readonly', 'readonly');
-                      input.focus();
-                      input.setSelectionRange(pos, pos);
-                    }, 100);
-                    setTimeout(() => {
-                      input.focus();
-                      input.setSelectionRange(pos, pos);
-                    }, 200);
-                  }
-                }}
-                onFocus={(e) => {
-                  // Ensure cursor is visible when input is focused
-                  if (e.target) {
-                    const input = e.target;
-                    // If cursor is at start (0) and there's existing text, move to end
-                    // This handles the case where user taps outside then back in
-                    let pos = input.selectionStart;
-                    if ((pos === 0 || pos === null || pos === undefined) && input.value.length > 0) {
-                      pos = input.value.length;
-                    } else if (pos === null || pos === undefined) {
-                      pos = input.value.length;
-                    }
-                    setTimeout(() => {
-                      input.setSelectionRange(pos, pos);
-                    }, 0);
-                    // On mobile, make extra attempts to show cursor
-                    if (isMobile) {
-                      setTimeout(() => {
-                        input.setSelectionRange(pos, pos);
-                        input.focus();
-                      }, 10);
-                      setTimeout(() => {
-                        input.setSelectionRange(pos, pos);
-                      }, 50);
-                    }
-                  }
-                }}
-                onKeyDown={e=>e.key==='Enter'&&handleSubmit(e, isMobile ? (inputRef.current?.value ?? inputValueRef.current ?? input) : undefined)} 
-                onClick={(e) => {
-                  // On mobile, ensure cursor is visible when user taps to position it
-                  if (isMobile && inputRef.current) {
-                    const input = inputRef.current;
-                    // Get click position relative to input
-                    const rect = input.getBoundingClientRect();
-                    const clickX = e.clientX - rect.left;
-                    // Approximate cursor position based on click position
-                    const textBeforeClick = input.value.substring(0, input.selectionStart || 0);
-                    const clickPosition = Math.round(clickX / 8);
-                    const newPosition = Math.max(0, Math.min(input.value.length, clickPosition));
-                    input.setSelectionRange(newPosition, newPosition);
-                    // Force focus to show cursor
-                    input.focus();
-                    // Multiple attempts to ensure cursor visibility
-                    setTimeout(() => {
-                      input.setSelectionRange(newPosition, newPosition);
-                    }, 10);
-                    setTimeout(() => {
-                      input.setSelectionRange(newPosition, newPosition);
-                    }, 50);
-                  }
-                }}
-                onBlur={() => {
-                  // Avoid fighting focus during virtual keyboard taps; only refocus if the user
-                  // actually left the field (e.g., tapped elsewhere).
-                  if (roundStarted && !gameOver && !isTransitioning) {
-                    setTimeout(() => {
-                      if (inputRef.current && document.activeElement !== inputRef.current) {
-                        inputRef.current.focus();
-                      }
-                    }, 150);
-                  }
-                }}
-              />
-              </div>
-              <button
-                type="button"
-                onClick={handleHint}
-                disabled={!roundStarted || gameOver || isTransitioning}
-                className={`flex-shrink-0 border-l py-2 px-3 min-w-[2.75rem] flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed relative overflow-hidden ${error ? 'border-[#c85f31]' : 'border-gray-300'} ${
-                  hintWord
-                    ? 'bg-white text-gray-400'
-                    : hintAvailable
-                      ? 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800'
-                      : 'bg-white text-gray-400'
-                }`}
-                title={hintAvailable ? "Hint" : "Hint available in 30 seconds"}
-                aria-label={hintAvailable ? "Hint" : "Hint loading"}
-              >
-                {!hintWord && !hintAvailable && (
-                  <span
-                    className="absolute bottom-0 left-0 pointer-events-none"
-                    aria-hidden
-                    style={{ width: `${hintFillProgress}%`, height: '10%', backgroundColor: '#195b7c' }}
-                  />
-                )}
-                <span className={`relative z-10 text-sm font-medium ${hintReadyPop ? 'hint-ready-pop' : ''}`}>
-                  Hint
+                <div
+                  className={`w-full relative ${hintRevealAnimating ? 'hint-reveal-anim' : ''}`}
+                  style={{ transformOrigin: 'center center' }}
+                >
+                <span
+                  ref={inputMeasureRef}
+                  aria-hidden
+                  className="absolute left-0 font-semibold whitespace-nowrap pointer-events-none invisible"
+                  style={{ fontSize: '30px' }}
+                >
+                  {input || ' '}
                 </span>
-              </button>
-              </div>
-              {/* Level Progress Indicators */}
-              <div className="relative inline-block font-bold text-center">
-                <div className="flex justify-center space-x-4">
-                  {[1, 2, 3].map((level) => {
-                    const levelResult = levelResults[level - 1];
-                    const isCompleted = levelResults.length >= level;
-                    const isCurrent = currentLevel === level && !gameOver;
-                    const gaveUp = levelResult && levelResult.gaveUp;
-                    return (
-                      <div
-                        key={level}
-                        className={`w-12 h-8 rounded-lg flex items-center justify-center text-sm font-bold transition-all duration-300 ${
-                          gaveUp
-                            ? 'bg-orange-500 bg-opacity-70 text-orange-800'
-                            : isCompleted 
-                              ? 'bg-green-500 bg-opacity-70 text-green-800' 
-                              : isCurrent 
-                                ? 'bg-gray-400 text-gray-700' 
-                                : 'bg-gray-300 text-gray-500'
-                        }`}
-                      >
-                        {level}
-                      </div>
-                    );
-                  })}
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={input}
+                  onChange={handleInputChange}
+                  maxLength={45}
+                  onPaste={(e) => {
+                    const pasted = (e.clipboardData && e.clipboardData.getData('text')) || '';
+                    if (input.length + pasted.length > 45) {
+                      setTimeout(() => {
+                        setError(true);
+                        setErrorMessage('Character limit reached (45)');
+                      }, 0);
+                    }
+                  }}
+                  className="border-0 rounded-none px-0 py-2 w-full font-semibold focus:ring-0 focus:outline-none bg-transparent placeholder:font-normal placeholder:text-gray-400 text-center"
+                  style={{
+                    fontSize: `${inputFontSizePx}px`,
+                    ...(error ? { color: '#c85f31' } : {}),
+                    caretColor: 'transparent',
+                    ...(isMobile ? { WebkitTapHighlightColor: 'transparent', cursor: 'text' } : {})
+                  }}
+                  placeholder="start typing..."
+                  disabled={!roundStarted || gameOver || isTransitioning}
+                  readOnly={isMobile}
+                  inputMode={isMobile ? 'none' : undefined}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  onTouchStart={(e) => {
+                    if (isMobile && inputRef.current) {
+                      e.preventDefault();
+                      const inputEl = inputRef.current;
+                      inputEl.removeAttribute('readonly');
+                      inputEl.focus();
+                      const pos = inputEl.value.length;
+                      inputEl.setSelectionRange(pos, pos);
+                      setTimeout(() => {
+                        inputEl.setAttribute('readonly', 'readonly');
+                        inputEl.focus();
+                        inputEl.setSelectionRange(pos, pos);
+                      }, 100);
+                      setTimeout(() => {
+                        inputEl.focus();
+                        inputEl.setSelectionRange(pos, pos);
+                      }, 200);
+                    }
+                  }}
+                  onFocus={(e) => {
+                    if (e.target) {
+                      const inputEl = e.target;
+                      let pos = inputEl.selectionStart;
+                      if ((pos === 0 || pos === null || pos === undefined) && inputEl.value.length > 0) pos = inputEl.value.length;
+                      else if (pos === null || pos === undefined) pos = inputEl.value.length;
+                      setTimeout(() => inputEl.setSelectionRange(pos, pos), 0);
+                      if (isMobile) {
+                        setTimeout(() => { inputEl.setSelectionRange(pos, pos); inputEl.focus(); }, 10);
+                        setTimeout(() => inputEl.setSelectionRange(pos, pos), 50);
+                      }
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                      if (!/^[a-zA-Z]$/.test(e.key)) {
+                        e.preventDefault();
+                        setError(true);
+                        setErrorMessage('Letters only, please');
+                        return;
+                      }
+                      if (input.length >= 45) {
+                        setError(true);
+                        setErrorMessage('Character limit reached (45)');
+                      }
+                    }
+                    if (e.key === 'Enter' && !e.repeat) {
+                      e.stopPropagation();
+                      handleSubmit(e, isMobile ? (inputValueRef.current ?? inputRef.current?.value ?? input ?? '') : undefined);
+                    }
+                  }}
+                  onClick={(e) => {
+                    if (isMobile && inputRef.current) {
+                      const inputEl = inputRef.current;
+                      const rect = inputEl.getBoundingClientRect();
+                      const clickX = e.clientX - rect.left;
+                      const clickPosition = Math.round(clickX / 8);
+                      const newPosition = Math.max(0, Math.min(inputEl.value.length, clickPosition));
+                      inputEl.setSelectionRange(newPosition, newPosition);
+                      inputEl.focus();
+                      setTimeout(() => inputEl.setSelectionRange(newPosition, newPosition), 10);
+                      setTimeout(() => inputEl.setSelectionRange(newPosition, newPosition), 50);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (roundStarted && !gameOver && !isTransitioning) {
+                      setTimeout(() => {
+                        if (inputRef.current && document.activeElement !== inputRef.current) {
+                          inputRef.current.focus();
+                        }
+                      }, 150);
+                    }
+                  }}
+                />
                 </div>
+              </div>
+              {/* Level Progress Indicators + Hint (same size/shape and spacing) */}
+              <div className="flex justify-center items-center space-x-4">
+                {[1, 2, 3].map((level) => {
+                  const levelResult = levelResults[level - 1];
+                  const isCompleted = levelResults.length >= level;
+                  const isCurrent = currentLevel === level && !gameOver;
+                  const gaveUp = levelResult && levelResult.gaveUp;
+                  return (
+                    <div
+                      key={level}
+                      className={`w-12 h-8 rounded-lg flex items-center justify-center text-sm font-bold transition-all duration-300 ${
+                        gaveUp
+                          ? 'bg-orange-500 bg-opacity-70 text-orange-800'
+                          : isCompleted 
+                            ? 'bg-green-500 bg-opacity-70 text-green-800' 
+                            : isCurrent 
+                              ? 'bg-gray-400 text-gray-700' 
+                              : 'bg-gray-300 text-gray-500'
+                      }`}
+                    >
+                      {level}
+                    </div>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={handleHint}
+                  disabled={!roundStarted || gameOver || isTransitioning}
+                  className={`flex-shrink-0 w-12 h-8 rounded-lg relative flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed overflow-visible border-0 ${
+                    hintWord
+                      ? 'text-white'
+                      : hintAvailable
+                        ? 'text-white hover:opacity-90'
+                        : 'bg-white text-gray-400'
+                  }`}
+                  style={hintWord ? { backgroundColor: 'rgba(28, 109, 42, 0.4)' } : hintAvailable && !hintWord ? { backgroundColor: '#1c6d2a' } : undefined}
+                  title={hintAvailable ? "Hint" : "Hint available in 30 seconds"}
+                  aria-label={hintAvailable ? "Hint" : "Hint loading"}
+                >
+                  {!hintWord && !hintAvailable && (
+                    <svg
+                      className="absolute inset-0 w-full h-full pointer-events-none rounded-lg"
+                      viewBox="0 0 100 100"
+                      preserveAspectRatio="none"
+                      aria-hidden
+                    >
+                      <path
+                        d="M 50 2 L 84 2 A 14 14 0 0 1 98 16 L 98 84 A 14 14 0 0 1 84 98 L 16 98 A 14 14 0 0 1 2 84 L 2 16 A 14 14 0 0 1 16 2 L 50 2"
+                        fill="none"
+                        stroke="#1c6d2a"
+                        strokeWidth="5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        pathLength={1}
+                        strokeDasharray="1 1"
+                        style={{ strokeDashoffset: 1 - hintFillProgress / 100, transition: 'stroke-dashoffset 0.25s linear' }}
+                      />
+                    </svg>
+                  )}
+                  <span className={`relative z-10 text-sm font-medium ${hintReadyPop ? 'hint-ready-pop' : ''}`}>
+                    Hint
+                  </span>
+                </button>
               </div>
               {/* Error message container with fixed height to prevent layout shift */}
               <div className="h-6 flex items-start justify-center">
@@ -1966,12 +2064,15 @@ export default function WordPuzzleGame() {
       )}
 
       {/* Statistics Modal */}
-      {showStats && (
-        <div className="fixed top-0 left-0 right-0 bottom-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] modal-fade-in" style={{ width: '100vw', height: '100vh', margin: 0, padding: 0 }}>
+      {(showStats || statsModalClosing) && (
+        <div className={`fixed top-0 left-0 right-0 bottom-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] ${statsModalClosing ? 'modal-fade-out' : 'modal-fade-in'}`} style={{ width: '100vw', height: '100vh', margin: 0, padding: 0 }}>
           <div className="bg-white rounded-lg p-4 sm:p-6 w-full max-w-xs sm:max-w-sm md:max-w-md mx-4 sm:mx-6 max-h-[85vh] sm:max-h-[90vh] overflow-y-auto">
             {/* Header */}
             <div className="flex justify-between items-center mb-4 sm:mb-6">
-              <h2 className="text-xl sm:text-2xl font-bold">Statistics</h2>
+              <h2 className="text-lg font-bold flex items-center gap-2">
+                <FontAwesomeIcon icon={faChartSimple} className="text-gray-600" />
+                Statistics
+              </h2>
               <div className="flex items-center space-x-2">
                 <button 
                   onClick={clearStats}
@@ -1980,7 +2081,11 @@ export default function WordPuzzleGame() {
                   Clear Stats
                 </button>
                 <button 
-                  onClick={() => setShowStats(false)}
+                  onClick={() => {
+                    setStatsModalClosing(true);
+                    setShowStats(false); // hide immediately so content underneath can animate in
+                    setTimeout(() => setStatsModalClosing(false), 200);
+                  }}
                   className="text-gray-500 hover:text-gray-700 text-lg sm:text-xl font-bold"
                 >
                   ×
@@ -2114,28 +2219,34 @@ export default function WordPuzzleGame() {
       )}
 
       {/* Rules Modal */}
-      {showRules && (
-        <div className="fixed top-0 left-0 right-0 bottom-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] modal-fade-in" style={{ width: '100vw', height: '100vh', margin: 0, padding: 0 }}>
-          <div
-            className="bg-white rounded-lg p-4 sm:p-6 w-full max-w-xs sm:max-w-sm md:max-w-md mx-4 sm:mx-6 overflow-y-auto"
-            style={{
-              maxHeight: '90vh',
-              display: 'flex',
-              flexDirection: 'column',
-              boxSizing: 'border-box',
-              textAlign: 'left',
-            }}
-          >
-            {/* Header */}
-            <div className="flex justify-between items-center mb-4 sm:mb-6">
-              <h2 className="text-xl sm:text-2xl font-bold text-left">Rules</h2>
+      {(showRules || rulesModalClosing) && (
+        <div className={`fixed top-0 left-0 right-0 bottom-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] ${rulesModalClosing ? 'modal-fade-out' : 'modal-fade-in'}`} style={{ width: '100vw', height: '100vh', margin: 0, padding: 0 }}>
+          <div className="bg-white rounded-lg w-full max-w-xs sm:max-w-sm md:max-w-md mx-4 sm:mx-6 flex flex-col max-h-[90vh] overflow-hidden">
+            {/* Header - sticky at top */}
+            <div className="flex justify-between items-center flex-shrink-0 p-4 sm:p-6 pb-2 border-b border-gray-200">
+              <h2 className="text-lg font-bold text-left flex items-center gap-2">
+                <FontAwesomeIcon icon={faCircleQuestion} className="text-gray-600" />
+                Rules
+              </h2>
               <button 
-                onClick={() => setShowRules(false)}
+                onClick={() => {
+                  rulesDismissedOnceRef.current = true;
+                  setRulesModalClosing(true);
+                  setShowRules(false); // hide immediately so gameplay can fade in concurrently
+                  setTimeout(() => {
+                    setRulesModalClosing(false);
+                    // Mark reveal as played after animation so next open/close won't replay float-in
+                    setTimeout(() => setRevealAnimationPlayedThisRound(true), 500);
+                    setTimeout(() => inputRef.current?.focus(), 100);
+                  }, 200);
+                }}
                 className="text-gray-500 hover:text-gray-700 text-lg sm:text-xl font-bold"
               >
                 ×
               </button>
             </div>
+            {/* Scrollable body */}
+            <div className="flex-1 min-h-0 overflow-y-auto text-left px-4 sm:px-6 py-2">
             <div className="mb-4 text-base font-medium">Use the provided letters to create words.</div>
             <ul className="mb-3 text-xs list-disc pl-5 space-y-1">
               <li>Provided letters must be used in the order they appear.</li>
@@ -2167,7 +2278,7 @@ export default function WordPuzzleGame() {
             <div className="flex items-center mb-3 text-xs" style={{ color: '#1c6d2a' }}>
               <FontAwesomeIcon icon={faCheckCircle} className="mr-1" /> Valid word—nonconsecutive provided letters.
             </div>
-            {/* LINK example */}
+            {/* LINKED example */}
             <div className="flex items-center space-x-1 mb-1">
               <div style={{ width: 24, height: 24, background: '#c85f31', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 600, fontSize: '0.95rem', boxShadow: '0 1px 3px rgba(0,0,0,0.10)' }}>L</div>
               <div style={{ width: 24, height: 24, background: '#195b7c', borderRadius: 6, transform: 'rotate(45deg) scale(0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 600, fontSize: '0.95rem', boxShadow: '0 1px 3px rgba(0,0,0,0.10)' }}>
@@ -2175,12 +2286,15 @@ export default function WordPuzzleGame() {
               </div>
               <div style={{ width: 24, height: 24, background: '#1c6d2a', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 600, fontSize: '0.95rem', boxShadow: '0 1px 3px rgba(0,0,0,0.10)' }}>N</div>
               <span>K</span>
+              <span>E</span>
+              <span>D</span>
             </div>
             <div className="flex items-center mb-3 text-xs" style={{ color: '#1c6d2a' }}>
               <FontAwesomeIcon icon={faCheckCircle} className="mr-1" /> Valid word—consecutive provided letters.
             </div>
-            {/* NAIL (invalid) example */}
+            {/* SNAIL (invalid) example */}
             <div className="flex items-center space-x-1 mb-1">
+              <span>S</span>
               <div style={{ width: 24, height: 24, background: '#1c6d2a', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 600, fontSize: '0.95rem', boxShadow: '0 1px 3px rgba(0,0,0,0.10)' }}>N</div>
               <span>A</span>
               <div style={{ width: 24, height: 24, background: '#195b7c', borderRadius: 6, transform: 'rotate(45deg) scale(0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 600, fontSize: '0.95rem', boxShadow: '0 1px 3px rgba(0,0,0,0.10)' }}>
@@ -2190,6 +2304,19 @@ export default function WordPuzzleGame() {
             </div>
             <div className="flex items-center mb-1 text-xs" style={{ color: '#992108' }}>
               <FontAwesomeIcon icon={faTimesCircle} className="mr-1" /> Invalid word—letters appear out of order from provided letters.
+            </div>
+            </div>
+            {/* Footer - sticky at bottom */}
+            <div className="flex-shrink-0 border-t border-gray-200 p-4 sm:p-6 pt-3">
+              <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={showRulesOnStart}
+                  onChange={toggleShowRulesOnStart}
+                  className="w-4 h-4 rounded border-gray-300"
+                />
+                Show Rules on Game Start
+              </label>
             </div>
           </div>
         </div>
@@ -2225,6 +2352,14 @@ export default function WordPuzzleGame() {
         
         .modal-fade-in {
           animation: modal-fade-in 0.2s ease-out forwards;
+        }
+        
+        @keyframes modal-fade-out {
+          0% { opacity: 1; }
+          100% { opacity: 0; }
+        }
+        .modal-fade-out {
+          animation: modal-fade-out 0.2s ease-out forwards;
         }
         
         /* Smooth transitions for game state changes */
