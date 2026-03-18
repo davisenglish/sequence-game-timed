@@ -1,15 +1,15 @@
 {
   "files": {
-    "main.css": "/sequence-game-timed/static/css/main.d6a76cc9.css",
-    "main.js": "/sequence-game-timed/static/js/main.5f31b5c7.js",
+    "main.css": "/sequence-game-timed/static/css/main.1af2762f.css",
+    "main.js": "/sequence-game-timed/static/js/main.90212cac.js",
     "static/js/453.96453769.chunk.js": "/sequence-game-timed/static/js/453.96453769.chunk.js",
     "index.html": "/sequence-game-timed/index.html",
-    "main.d6a76cc9.css.map": "/sequence-game-timed/static/css/main.d6a76cc9.css.map",
-    "main.5f31b5c7.js.map": "/sequence-game-timed/static/js/main.5f31b5c7.js.map",
+    "main.1af2762f.css.map": "/sequence-game-timed/static/css/main.1af2762f.css.map",
+    "main.90212cac.js.map": "/sequence-game-timed/static/js/main.90212cac.js.map",
     "453.96453769.chunk.js.map": "/sequence-game-timed/static/js/453.96453769.chunk.js.map"
   },
   "entrypoints": [
-    "static/css/main.d6a76cc9.css",
-    "static/js/main.5f31b5c7.js"
+    "static/css/main.1af2762f.css",
+    "static/js/main.90212cac.js"
   ]
 }
