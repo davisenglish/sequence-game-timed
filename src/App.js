@@ -1749,7 +1749,7 @@ export default function WordPuzzleGame() {
         {!roundStarted && (
           <>
             <a 
-              href="https://davisenglish.github.io/sequence-game-home/"
+              href="https://stringlish.com"
               target="_self"
               rel="noopener noreferrer"
             >
@@ -1788,7 +1788,7 @@ export default function WordPuzzleGame() {
             </div>
             <div className="flex items-center justify-center flex-shrink-0 space-x-3">
               <a 
-                href="https://davisenglish.github.io/sequence-game-home/"
+                href="https://stringlish.com"
                 className="text-gray-600 hover:text-gray-800 transition-colors"
                 title="Home"
               >
@@ -1896,7 +1896,7 @@ export default function WordPuzzleGame() {
           )}
           <div className="flex flex-row items-center space-x-4">
             <a 
-              href="https://davisenglish.github.io/sequence-game-home/"
+              href="https://stringlish.com"
               className="text-gray-600 hover:text-gray-800 transition-colors"
               title="Home"
             >
