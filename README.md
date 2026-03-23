@@ -43,6 +43,10 @@ npm start
 
 The app will open in your browser at `http://localhost:3000`
 
+### Contact form
+
+The **Contact** link in the footer (on the home and game over screens) opens the user’s email app (`mailto:`) with messages addressed to **davisenglishco@gmail.com**.
+
 ## 🚀 Deployment
 
 ### Automatic Deployment
