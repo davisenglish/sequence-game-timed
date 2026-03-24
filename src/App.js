@@ -1763,7 +1763,10 @@ export default function WordPuzzleGame() {
               />
             </a>
             <h1 className="text-3xl font-bold">Stringlish</h1>
-            <p className="text-lg font-medium text-gray-600 mt-1">Timed</p>
+            <p className="text-lg font-medium text-gray-600 mt-1 flex items-center justify-center gap-2">
+              <span className="select-none" aria-hidden>⏰</span>
+              <span>Timed</span>
+            </p>
           </>
         )}
         {!roundStarted && (
@@ -2729,14 +2732,13 @@ export default function WordPuzzleGame() {
           {/* Game Controls */}
           <div className="flex flex-col items-center space-y-3 fade-in">
             {gameOver && (
-              <button
-                type="button"
-                onClick={resetGame}
+              <a
+                href="https://stringlish.com"
                 className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-semibold rounded border border-gray-400 bg-white text-black"
               >
                 <FontAwesomeIcon icon={faHouseChimney} className="text-base shrink-0" />
                 Home
-              </button>
+              </a>
             )}
           </div>
         </>
@@ -2891,8 +2893,8 @@ export default function WordPuzzleGame() {
                     ? finalGameTimeRef.current
                     : parseInt(localStorage.getItem('currentRoundTimeTimed') || '0', 10);
                   const text = completed && lastRoundTime > 0
-                    ? `Stringlish, ${dateStr} - Time: ${formatTime(lastRoundTime)}. See if you can beat me at https://www.stringlish.com/`
-                    : `Stringlish, ${dateStr} - Didn't quite get it this time. See if you can beat me at https://www.stringlish.com/`;
+                    ? `Stringlish | Timed ⏰, ${dateStr} - Time: ${formatTime(lastRoundTime)}. See if you can beat me at https://www.stringlish.com/`
+                    : `Stringlish | Timed ⏰, ${dateStr} - Didn't quite get it this time. See if you can beat me at https://www.stringlish.com/`;
                   if (typeof navigator.share === 'function') {
                     try {
                       await navigator.share({ text });
