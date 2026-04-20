@@ -6,7 +6,7 @@
 // Storage: sequenceGameTimedStats, currentRoundTimeTimed, stringlich_timed_daily* (completion / abandon / snapshot / in-progress)
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faStopwatch, faCircleInfo, faChartSimple, faCheckCircle, faTimesCircle, faCircleQuestion, faHouseChimney, faShareNodes, faChevronDown, faEnvelope } from '@fortawesome/free-solid-svg-icons';
+import { faStopwatch, faCircleInfo, faChartSimple, faCheckCircle, faTimesCircle, faCircleQuestion, faHouseChimney, faShareNodes, faChevronDown, faEnvelope, faBug } from '@fortawesome/free-solid-svg-icons';
 import words from 'an-array-of-english-words';
 
 // Preprocess the word list once for performance, excluding certain suffixes
@@ -73,6 +73,57 @@ const LS_DAILY = {
   snapshot: 'stringlich_timed_dailySnapshot_v4',
   inProgress: 'stringlich_timed_dailyInProgress_v4',
 };
+
+/** Which Time Distribution bar (0–4) was incremented on the last win (green highlight in Statistics). */
+const LS_TIMED_LAST_DIST_BUCKET = 'stringlich_timed_lastDistBucket_v4';
+
+const TIME_DISTRIBUTION_LABELS = ['0–0.5 min', '0.5–1 min', '1–2 min', '2–3 min', '> 3 min'];
+
+/** How many full-win times we keep and show under Fastest Times. */
+const FASTEST_TIMES_COUNT = 4;
+
+/** Win time in whole seconds → bucket index for Time Distribution. */
+function bucketIndexForWinSeconds(totalSeconds) {
+  const t = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  if (t < 30) return 0;
+  if (t < 60) return 1;
+  if (t < 120) return 2;
+  if (t < 180) return 3;
+  return 4;
+}
+
+function normalizeStatsTimeDistribution(raw) {
+  const out = { ...raw };
+  let td = out.timeDistribution;
+  if (!Array.isArray(td) || td.length !== 5) {
+    td = [0, 0, 0, 0, 0];
+  } else {
+    td = td.map((n) => Math.max(0, Math.floor(Number(n) || 0)));
+  }
+  out.timeDistribution = td;
+  return out;
+}
+
+function normalizeFastestTimes(raw) {
+  const out = { ...raw };
+  let ft = out.fastestTimes;
+  if (!Array.isArray(ft)) {
+    out.fastestTimes = [];
+    return out;
+  }
+  out.fastestTimes = ft
+    .map((t) => Number(t))
+    .filter((t) => Number.isFinite(t) && t > 0)
+    .sort((a, b) => a - b)
+    .slice(0, FASTEST_TIMES_COUNT);
+  return out;
+}
+
+function clearLastTimeDistBucketHighlight() {
+  try {
+    localStorage.removeItem(LS_TIMED_LAST_DIST_BUCKET);
+  } catch (_) {}
+}
 
 /** Local calendar YYYY-MM-DD — daily letters, completion, abandon, rollover. */
 function getLocalDateString(d = new Date()) {
@@ -845,10 +896,13 @@ export default function WordPuzzleGame() {
     maxStreak: 0,
     fastestTimes: [],
     averageTimes: [],
-    lastWinPuzzleDate: null
+    lastWinPuzzleDate: null,
+    timeDistribution: [0, 0, 0, 0, 0]
   });
   const [showRules, setShowRules] = useState(false);
   const [showContact, setShowContact] = useState(false);
+  /** Which entry point opened the shared contact form — header title + icon only. */
+  const [contactModalMode, setContactModalMode] = useState('contact');
   const [contactModalClosing, setContactModalClosing] = useState(false);
   const [contactEmail, setContactEmail] = useState('');
   const [contactSubject, setContactSubject] = useState('');
@@ -962,7 +1016,9 @@ export default function WordPuzzleGame() {
     const savedStats = localStorage.getItem('sequenceGameTimedStats');
     if (savedStats) {
       try {
-        const norm = normalizeTimedStatsStreak(JSON.parse(savedStats));
+        const norm = normalizeStatsTimeDistribution(
+          normalizeFastestTimes(normalizeTimedStatsStreak(JSON.parse(savedStats)))
+        );
         setStats(norm);
         localStorage.setItem('sequenceGameTimedStats', JSON.stringify(norm));
       } catch (_) {}
@@ -1105,7 +1161,7 @@ export default function WordPuzzleGame() {
         markDailyAbandonedForLocalDate(prevDay);
       }
       setStats((prev) => {
-        let n = normalizeTimedStatsStreak({ ...prev });
+        let n = normalizeStatsTimeDistribution(normalizeFastestTimes(normalizeTimedStatsStreak({ ...prev })));
         if (roundStartedRef.current && !gameOverRef.current) {
           n = { ...n, currentStreak: 0 };
         }
@@ -1332,7 +1388,17 @@ export default function WordPuzzleGame() {
     setRoundStarted(true);
     setShowRevealAnimation(false);
     setRevealAnimationPlayedThisRound(true);
-    localStorage.setItem('currentRoundTimeTimed', String(finalT));
+    const replayLevelResults = snap.levelResults || [];
+    const replayIsFullWin =
+      replayLevelResults.length === 3 &&
+      replayLevelResults.every((r) => r.word && !r.gaveUp);
+    try {
+      if (replayIsFullWin && finalT > 0) {
+        localStorage.setItem('currentRoundTimeTimed', String(finalT));
+      } else {
+        localStorage.removeItem('currentRoundTimeTimed');
+      }
+    } catch (_) {}
     setTimeout(() => setShowStats(true), 500);
   };
 
@@ -1340,6 +1406,7 @@ export default function WordPuzzleGame() {
     const puzzleDay = getLocalDateString();
     if (readDailyCompletedUtc() === puzzleDay) return;
     if (readDailyAbandonedUtc() === puzzleDay) return;
+    clearLastTimeDistBucketHighlight();
     setShowRevealAnimation(true);
     setRevealAnimationPlayedThisRound(false);
     setError(false);
@@ -1392,6 +1459,7 @@ export default function WordPuzzleGame() {
       setContactEmail('');
       setContactSubject('');
       setContactMessage('');
+      setContactModalMode('contact');
     }, 200);
   };
 
@@ -1399,7 +1467,7 @@ export default function WordPuzzleGame() {
   const handleContactSend = () => {
     const msg = contactMessage.trim();
     if (!msg) return;
-    const recipient = 'davisenglishco@gmail.com';
+    const recipient = 'info@stringlish.com';
     const subject = encodeURIComponent(
       (contactSubject.trim() || 'Stringlish — contact').slice(0, 200)
     );
@@ -1559,6 +1627,7 @@ export default function WordPuzzleGame() {
     setRoundStarted(false);
     setShowRevealAnimation(false);
     setShowStats(false);
+    clearLastTimeDistBucketHighlight();
     setShowGiveUpConfirm(false);
     setShowClearStatsButton(false);
     setShowInstructions(false);
@@ -1599,6 +1668,11 @@ export default function WordPuzzleGame() {
     newStats.maxStreak = newStats.maxStreak || 0;
     newStats.fastestTimes = newStats.fastestTimes || [];
     newStats.averageTimes = newStats.averageTimes || [];
+    if (!Array.isArray(newStats.timeDistribution) || newStats.timeDistribution.length !== 5) {
+      newStats.timeDistribution = [0, 0, 0, 0, 0];
+    } else {
+      newStats.timeDistribution = newStats.timeDistribution.map((n) => Math.max(0, Math.floor(Number(n) || 0)));
+    }
 
     const hasGiveUps = results.some((r) => r.gaveUp);
     const isFullWin =
@@ -1630,12 +1704,23 @@ export default function WordPuzzleGame() {
       newStats.currentStreak = 0;
     }
 
-    if (timeForThisRound > 0) {
+    if (isFullWin && timeForThisRound > 0) {
       newStats.fastestTimes = newStats.fastestTimes.filter((t) => t !== timeForThisRound);
       newStats.fastestTimes.push(timeForThisRound);
       newStats.fastestTimes.sort((a, b) => a - b);
-      newStats.fastestTimes = newStats.fastestTimes.slice(0, 5);
-      localStorage.setItem('currentRoundTimeTimed', timeForThisRound.toString());
+      newStats.fastestTimes = newStats.fastestTimes.slice(0, FASTEST_TIMES_COUNT);
+      try {
+        localStorage.setItem('currentRoundTimeTimed', timeForThisRound.toString());
+      } catch (_) {}
+      const bIdx = bucketIndexForWinSeconds(timeForThisRound);
+      newStats.timeDistribution[bIdx] = (newStats.timeDistribution[bIdx] || 0) + 1;
+      try {
+        localStorage.setItem(LS_TIMED_LAST_DIST_BUCKET, String(bIdx));
+      } catch (_) {}
+    } else {
+      try {
+        localStorage.removeItem('currentRoundTimeTimed');
+      } catch (_) {}
     }
 
     setStats(newStats);
@@ -1805,7 +1890,8 @@ export default function WordPuzzleGame() {
   const clearStats = () => {
     // Clear all statistical data
     localStorage.removeItem('sequenceGameTimedStats');
-    
+    clearLastTimeDistBucketHighlight();
+
     // Reset stats to initial state
     setStats({
       gamesPlayed: 0,
@@ -1814,7 +1900,8 @@ export default function WordPuzzleGame() {
       maxStreak: 0,
       fastestTimes: [],
       averageTimes: [],
-      lastWinPuzzleDate: null
+      lastWinPuzzleDate: null,
+      timeDistribution: [0, 0, 0, 0, 0]
     });
   };
 
@@ -1952,19 +2039,13 @@ export default function WordPuzzleGame() {
         )}
         {!roundStarted && (
           <div className="mt-4 text-center space-y-1">
-            <p className="text-base font-semibold text-gray-800">Stringlish #{dailyHomeMeta.puzzleNumber}</p>
+            <p className="text-base font-semibold text-gray-800">#{dailyHomeMeta.puzzleNumber}</p>
             <p className="text-sm text-gray-500">{dailyHomeMeta.dateLabel}</p>
           </div>
         )}
         {roundStarted && (
           <div className="fixed top-0 left-0 right-0 z-30 bg-white border-b border-gray-200">
-            <div
-              className={`max-w-xl mx-auto py-2 flex items-center ${
-                gameOver
-                  ? 'pl-[max(5px,env(safe-area-inset-left))] pr-[max(5px,env(safe-area-inset-right))] sm:px-6'
-                  : 'px-6'
-              }`}
-            >
+            <div className="max-w-xl mx-auto px-6 py-2 flex items-center">
             <div className="flex-1 min-w-0 flex items-center">
               <span className="text-base font-semibold text-gray-600 tabular-nums border border-gray-300 rounded px-2 py-1 bg-gray-50">
                 {formatTime(gameOver && finalGameTimeRef.current != null ? finalGameTimeRef.current : gameTime)}
@@ -2465,7 +2546,7 @@ export default function WordPuzzleGame() {
                         d="M 50 2 L 84 2 A 14 14 0 0 1 98 16 L 98 84 A 14 14 0 0 1 84 98 L 16 98 A 14 14 0 0 1 2 84 L 2 16 A 14 14 0 0 1 16 2 L 50 2"
                         fill="none"
                         stroke="#1c6d2a"
-                        strokeWidth="5"
+                        strokeWidth="8"
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         pathLength={1}
@@ -2556,6 +2637,14 @@ export default function WordPuzzleGame() {
                 const popupH = Math.round(letterH * popupScale);
                 const popupGap = 4;
                 const keyBg = '#e5e7eb';
+                const triUpper = (letters && String(letters).toUpperCase()) || '';
+                const mobileProvidedLetterBg = {};
+                for (let i = 0; i < Math.min(3, triUpper.length); i++) {
+                  const c = triUpper[i];
+                  if (c && mobileProvidedLetterBg[c] === undefined) {
+                    mobileProvidedLetterBg[c] = shapes[i].color;
+                  }
+                }
                 const findNearestIndexByCenters = (x, widths, gap) => {
                   let cursor = 0;
                   let bestIndex = 0;
@@ -2676,7 +2765,11 @@ export default function WordPuzzleGame() {
                   >
             {/* Top row: Q-P */}
             <div className="flex justify-center relative flex-nowrap" style={{ gap: gapPx, marginBottom: rowGapPx }} onPointerDown={handleTopRowBackgroundPointerDown} onPointerUp={handleTopRowPointerUpOrCancel} onPointerCancel={handleTopRowPointerUpOrCancel}>
-              {['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'].map((letter) => (
+              {['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'].map((letter) => {
+                const provBg = mobileProvidedLetterBg[letter];
+                const popBg = provBg || keyBg;
+                const popFg = provBg ? '#ffffff' : '#1f2937';
+                return (
                 <div key={letter} style={{ position: 'relative', width: letterW, height: letterH, flexShrink: 0, overflow: 'visible' }}>
                   <button
                     type="button"
@@ -2690,24 +2783,46 @@ export default function WordPuzzleGame() {
                     }}
                     onPointerUp={(e) => { e.preventDefault(); e.stopPropagation(); setPressedKey(null); }}
                     onPointerCancel={(e) => { e.preventDefault(); e.stopPropagation(); setPressedKey(null); }}
-                    className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-lg text-base sm:text-lg transition-colors touch-manipulation"
+                    className={`font-semibold rounded-lg text-base sm:text-lg transition-colors touch-manipulation ${provBg ? 'text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-800'}`}
                     disabled={!roundStarted || gameOver || isTransitioning}
-                    style={{ touchAction: 'manipulation', width: '100%', height: '100%', padding: keyPadding, boxSizing: 'border-box', userSelect: 'none', WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: letterH, position: 'relative', zIndex: 2, pointerEvents: 'auto' }}
+                    style={{
+                      touchAction: 'manipulation',
+                      width: '100%',
+                      height: '100%',
+                      padding: keyPadding,
+                      boxSizing: 'border-box',
+                      userSelect: 'none',
+                      WebkitUserSelect: 'none',
+                      WebkitTapHighlightColor: 'transparent',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      minHeight: letterH,
+                      position: 'relative',
+                      zIndex: 2,
+                      pointerEvents: 'auto',
+                      ...(provBg ? { backgroundColor: provBg } : {}),
+                    }}
                   >
                     {pressedKey === letter ? '' : letter}
                   </button>
                   {pressedKey === letter && (
                     <>
-                      <div style={{ position: 'absolute', left: 0, right: 0, bottom: '100%', height: popupGap, backgroundColor: keyBg, borderTopLeftRadius: 6, borderTopRightRadius: 6, zIndex: 10 }} />
-                      <div style={{ position: 'absolute', left: '50%', marginLeft: -popupW / 2, bottom: `calc(100% + ${popupGap}px)`, width: popupW, height: popupH, backgroundColor: keyBg, borderRadius: 8, boxShadow: '0 2px 6px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2em', fontWeight: 600, color: '#1f2937', zIndex: 10, pointerEvents: 'none' }}>{letter}</div>
+                      <div style={{ position: 'absolute', left: 0, right: 0, bottom: '100%', height: popupGap, backgroundColor: popBg, borderTopLeftRadius: 6, borderTopRightRadius: 6, zIndex: 10 }} />
+                      <div style={{ position: 'absolute', left: '50%', marginLeft: -popupW / 2, bottom: `calc(100% + ${popupGap}px)`, width: popupW, height: popupH, backgroundColor: popBg, borderRadius: 8, boxShadow: '0 2px 6px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2em', fontWeight: 600, color: popFg, zIndex: 10, pointerEvents: 'none' }}>{letter}</div>
                     </>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
             {/* Middle row: A-L */}
             <div className="flex justify-center relative flex-nowrap" style={{ gap: gapPx, marginBottom: rowGapPx }} onPointerDown={handleMiddleRowBackgroundPointerDown} onPointerUp={handleMiddleRowPointerUpOrCancel} onPointerCancel={handleMiddleRowPointerUpOrCancel}>
-              {['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'].map((letter) => (
+              {['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'].map((letter) => {
+                const provBg = mobileProvidedLetterBg[letter];
+                const popBg = provBg || keyBg;
+                const popFg = provBg ? '#ffffff' : '#1f2937';
+                return (
                 <div key={letter} style={{ position: 'relative', width: letterW, height: letterH, flexShrink: 0, overflow: 'visible' }}>
                   <button
                     type="button"
@@ -2721,20 +2836,38 @@ export default function WordPuzzleGame() {
                     }}
                     onPointerUp={(e) => { e.preventDefault(); e.stopPropagation(); setPressedKey(null); }}
                     onPointerCancel={(e) => { e.preventDefault(); e.stopPropagation(); setPressedKey(null); }}
-                    className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-lg text-base sm:text-lg transition-colors touch-manipulation"
+                    className={`font-semibold rounded-lg text-base sm:text-lg transition-colors touch-manipulation ${provBg ? 'text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-800'}`}
                     disabled={!roundStarted || gameOver || isTransitioning}
-                    style={{ touchAction: 'manipulation', width: '100%', height: '100%', padding: keyPadding, boxSizing: 'border-box', userSelect: 'none', WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: letterH, position: 'relative', zIndex: 2, pointerEvents: 'auto' }}
+                    style={{
+                      touchAction: 'manipulation',
+                      width: '100%',
+                      height: '100%',
+                      padding: keyPadding,
+                      boxSizing: 'border-box',
+                      userSelect: 'none',
+                      WebkitUserSelect: 'none',
+                      WebkitTapHighlightColor: 'transparent',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      minHeight: letterH,
+                      position: 'relative',
+                      zIndex: 2,
+                      pointerEvents: 'auto',
+                      ...(provBg ? { backgroundColor: provBg } : {}),
+                    }}
                   >
                     {pressedKey === letter ? '' : letter}
                   </button>
                   {pressedKey === letter && (
                     <>
-                      <div style={{ position: 'absolute', left: 0, right: 0, bottom: '100%', height: popupGap, backgroundColor: keyBg, borderTopLeftRadius: 6, borderTopRightRadius: 6, zIndex: 10 }} />
-                      <div style={{ position: 'absolute', left: '50%', marginLeft: -popupW / 2, bottom: `calc(100% + ${popupGap}px)`, width: popupW, height: popupH, backgroundColor: keyBg, borderRadius: 8, boxShadow: '0 2px 6px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2em', fontWeight: 600, color: '#1f2937', zIndex: 10, pointerEvents: 'none' }}>{letter}</div>
+                      <div style={{ position: 'absolute', left: 0, right: 0, bottom: '100%', height: popupGap, backgroundColor: popBg, borderTopLeftRadius: 6, borderTopRightRadius: 6, zIndex: 10 }} />
+                      <div style={{ position: 'absolute', left: '50%', marginLeft: -popupW / 2, bottom: `calc(100% + ${popupGap}px)`, width: popupW, height: popupH, backgroundColor: popBg, borderRadius: 8, boxShadow: '0 2px 6px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2em', fontWeight: 600, color: popFg, zIndex: 10, pointerEvents: 'none' }}>{letter}</div>
                     </>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
             {/* Bottom row: Shift + Z-M + Backspace */}
             <div className="flex justify-center relative flex-nowrap" style={{ gap: gapPx, marginBottom: rowGapPx }} onPointerDown={handleBottomRowBackgroundPointerDown} onPointerUp={handleBottomRowPointerUpOrCancel} onPointerCancel={handleBottomRowPointerUpOrCancel}>
@@ -2781,7 +2914,11 @@ export default function WordPuzzleGame() {
                   </span>
                 </button>
               </div>
-              {['Z', 'X', 'C', 'V', 'B', 'N', 'M'].map((letter) => (
+              {['Z', 'X', 'C', 'V', 'B', 'N', 'M'].map((letter) => {
+                const provBg = mobileProvidedLetterBg[letter];
+                const popBg = provBg || keyBg;
+                const popFg = provBg ? '#ffffff' : '#1f2937';
+                return (
                 <div key={letter} style={{ position: 'relative', width: letterW, height: letterH, flexShrink: 0, overflow: 'visible' }}>
                   <button
                     type="button"
@@ -2795,20 +2932,38 @@ export default function WordPuzzleGame() {
                     }}
                     onPointerUp={(e) => { e.preventDefault(); e.stopPropagation(); setPressedKey(null); }}
                     onPointerCancel={(e) => { e.preventDefault(); e.stopPropagation(); setPressedKey(null); }}
-                    className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-lg text-base sm:text-lg transition-colors touch-manipulation"
+                    className={`font-semibold rounded-lg text-base sm:text-lg transition-colors touch-manipulation ${provBg ? 'text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-800'}`}
                     disabled={!roundStarted || gameOver || isTransitioning}
-                    style={{ touchAction: 'manipulation', width: '100%', height: '100%', padding: keyPadding, boxSizing: 'border-box', userSelect: 'none', WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: letterH, position: 'relative', zIndex: 2, pointerEvents: 'auto' }}
+                    style={{
+                      touchAction: 'manipulation',
+                      width: '100%',
+                      height: '100%',
+                      padding: keyPadding,
+                      boxSizing: 'border-box',
+                      userSelect: 'none',
+                      WebkitUserSelect: 'none',
+                      WebkitTapHighlightColor: 'transparent',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      minHeight: letterH,
+                      position: 'relative',
+                      zIndex: 2,
+                      pointerEvents: 'auto',
+                      ...(provBg ? { backgroundColor: provBg } : {}),
+                    }}
                   >
                     {pressedKey === letter ? '' : letter}
                   </button>
                   {pressedKey === letter && (
                     <>
-                      <div style={{ position: 'absolute', left: 0, right: 0, bottom: '100%', height: popupGap, backgroundColor: keyBg, borderTopLeftRadius: 6, borderTopRightRadius: 6, zIndex: 10 }} />
-                      <div style={{ position: 'absolute', left: '50%', marginLeft: -popupW / 2, bottom: `calc(100% + ${popupGap}px)`, width: popupW, height: popupH, backgroundColor: keyBg, borderRadius: 8, boxShadow: '0 2px 6px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2em', fontWeight: 600, color: '#1f2937', zIndex: 10, pointerEvents: 'none' }}>{letter}</div>
+                      <div style={{ position: 'absolute', left: 0, right: 0, bottom: '100%', height: popupGap, backgroundColor: popBg, borderTopLeftRadius: 6, borderTopRightRadius: 6, zIndex: 10 }} />
+                      <div style={{ position: 'absolute', left: '50%', marginLeft: -popupW / 2, bottom: `calc(100% + ${popupGap}px)`, width: popupW, height: popupH, backgroundColor: popBg, borderRadius: 8, boxShadow: '0 2px 6px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2em', fontWeight: 600, color: popFg, zIndex: 10, pointerEvents: 'none' }}>{letter}</div>
                     </>
                   )}
                 </div>
-              ))}
+                );
+              })}
               <div style={{ position: 'relative', width: specialWidth, height: specialHeight, flexShrink: 0 }}>
                 <button
                   type="button"
@@ -2856,9 +3011,25 @@ export default function WordPuzzleGame() {
                 }}
                 onPointerUp={(e) => { e.preventDefault(); e.stopPropagation(); setPressedKey(null); }}
                 onPointerCancel={(e) => { e.preventDefault(); e.stopPropagation(); setPressedKey(null); }}
-                className="text-white rounded-lg text-base font-semibold disabled:opacity-50 touch-manipulation"
+                className="bg-gray-200 hover:bg-gray-300 active:bg-gray-400 text-black rounded-lg text-base font-semibold disabled:opacity-50 touch-manipulation"
                 disabled={!roundStarted || gameOver || isTransitioning}
-                style={{ backgroundColor: '#195b7c', touchAction: 'manipulation', userSelect: 'none', WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: pressedKey === 'submit' ? 10 : 2, transform: pressedKey === 'submit' ? 'scale(1.02)' : 'scale(1)', transition: 'transform 0.1s ease-out', width: submitWidth, height: letterH, minHeight: letterH }}
+                style={{
+                  touchAction: 'manipulation',
+                  userSelect: 'none',
+                  WebkitUserSelect: 'none',
+                  WebkitTapHighlightColor: 'transparent',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  position: 'relative',
+                  zIndex: pressedKey === 'submit' ? 10 : 2,
+                  transform: pressedKey === 'submit' ? 'scale(1.02)' : 'scale(1)',
+                  transition: 'transform 0.1s ease-out',
+                  width: submitWidth,
+                  height: letterH,
+                  minHeight: letterH,
+                  backgroundColor: pressedKey === 'submit' ? 'rgb(156, 163, 175)' : undefined,
+                }}
               >
                 Submit
               </button>
@@ -2952,6 +3123,7 @@ export default function WordPuzzleGame() {
                     setShowClearStatsButton(false);
                     setStatsModalClosing(true);
                     setShowStats(false); // hide immediately so content underneath can animate in
+                    clearLastTimeDistBucketHighlight();
                     setTimeout(() => setStatsModalClosing(false), 200);
                   }}
                   className="text-gray-500 hover:text-gray-700 text-lg sm:text-xl font-bold"
@@ -2971,8 +3143,12 @@ export default function WordPuzzleGame() {
                       <span>Congratulations!</span>
                       <span aria-hidden className="select-none">🎉</span>
                     </div>
-                    <div className="text-sm text-gray-600 mb-1">You completed this Stringlish in:</div>
-                    <div className="text-2xl font-bold text-green-700">{formatTime(gameOver && finalGameTimeRef.current != null ? finalGameTimeRef.current : gameTime)}</div>
+                    <p className="text-sm text-center">
+                      <span className="text-gray-600">Final Time:</span>{' '}
+                      <span className="font-semibold text-green-700 tabular-nums">
+                        {formatTime(gameOver && finalGameTimeRef.current != null ? finalGameTimeRef.current : gameTime)}
+                      </span>
+                    </p>
                   </div>
                 ) : (
                   <div className="text-lg font-semibold text-gray-600 flex items-center justify-center gap-2 flex-wrap">
@@ -2985,7 +3161,7 @@ export default function WordPuzzleGame() {
             )}
             
             {/* Stats Grid */}
-            <div className="grid grid-cols-5 gap-2 mb-6 sm:mb-8">
+            <div className="grid grid-cols-5 gap-2 mb-3 sm:mb-3">
               <div className="text-center">
                 <div className="text-xl sm:text-2xl font-bold">{stats.gamesPlayed}</div>
                 <div className="text-xs text-gray-600 leading-tight">
@@ -3017,15 +3193,65 @@ export default function WordPuzzleGame() {
                 </div>
               </div>
             </div>
+
+            {/* Time Distribution — same bar pattern as ver2 “Correct Answers” */}
+            <div className="mb-3 sm:mb-3">
+              <h3 className="text-sm font-semibold mb-1 flex justify-center items-center gap-1.5">
+                <span className="text-base leading-none" aria-hidden>
+                  ⏳
+                </span>
+                Time Distribution
+              </h3>
+              <div className="grid grid-cols-[max-content_1fr] gap-x-1.5 gap-y-0.5 items-center">
+                {(() => {
+                  const td =
+                    stats.timeDistribution && stats.timeDistribution.length === 5
+                      ? stats.timeDistribution.map((n) => Math.max(0, Math.floor(Number(n) || 0)))
+                      : [0, 0, 0, 0, 0];
+                  let lastB = NaN;
+                  try {
+                    const raw = localStorage.getItem(LS_TIMED_LAST_DIST_BUCKET);
+                    if (raw != null) lastB = parseInt(raw, 10);
+                  } catch (_) {}
+                  const maxC = Math.max(...td, 1);
+                  return TIME_DISTRIBUTION_LABELS.map((label, idx) => {
+                    const count = td[idx] || 0;
+                    const isHighlight = !Number.isNaN(lastB) && lastB === idx;
+                    const barWidth = count > 0 ? (count / maxC) * 100 : 10;
+                    return (
+                      <React.Fragment key={label}>
+                        <span className="text-xs font-medium text-gray-700 leading-tight text-right whitespace-nowrap tabular-nums">
+                          {label}
+                        </span>
+                        <div className="min-w-0 bg-gray-300 rounded-full h-3 relative">
+                          {count > 0 && (
+                            <div
+                              className={`h-3 rounded-full ${isHighlight ? 'bg-green-600' : 'bg-gray-500'}`}
+                              style={{
+                                width: `${barWidth}%`,
+                                backgroundColor: isHighlight ? '#1c6d2a' : undefined,
+                              }}
+                            />
+                          )}
+                          <span className="absolute right-2 -top-0.5 text-xs font-medium text-white">{count}</span>
+                        </div>
+                      </React.Fragment>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
             
             {/* Fastest Times */}
-            <div className="mb-6 sm:mb-8">
-              <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4 flex items-center gap-2">
-                <span aria-hidden className="select-none">⚡</span>
+            <div className="mb-3 sm:mb-6">
+              <h3 className="text-sm font-semibold mb-1 flex justify-center items-center gap-1.5">
+                <span className="text-base leading-none" aria-hidden>
+                  ⚡
+                </span>
                 Fastest Times
               </h3>
-              <div className="space-y-2">
-                {[1, 2, 3, 4, 5].map((position) => {
+              <div className="space-y-1.5">
+                {Array.from({ length: FASTEST_TIMES_COUNT }, (_, i) => i + 1).map((position) => {
                   const time = (stats.fastestTimes && stats.fastestTimes[position - 1]) || 0;
                   const currentRoundTime = parseInt(localStorage.getItem('currentRoundTimeTimed') || '0');
                   const isCurrentRound = time === currentRoundTime && time > 0;
@@ -3033,20 +3259,17 @@ export default function WordPuzzleGame() {
                   const barWidth = time > 0 ? (time / maxTime) * 100 : 10;
                   
                   return (
-                    <div key={position} className="flex items-center space-x-3">
-                      <span className="text-sm font-medium w-4">{position}</span>
-                      <div className="flex-1 bg-gray-300 rounded-full h-4 relative">
-                        <div 
-                          className={`h-4 rounded-full ${isCurrentRound ? 'bg-green-600' : 'bg-gray-500'}`}
-                          style={{ 
-                            width: `${barWidth}%`,
-                            backgroundColor: isCurrentRound ? '#1c6d2a' : undefined
-                          }}
-                        ></div>
-                        <span className="absolute right-2 top-1/2 transform -translate-y-1/2 text-xs font-medium text-white">
-                          {time > 0 ? formatTime(time) : '-'}
-                        </span>
-                      </div>
+                    <div key={position} className="bg-gray-300 rounded-full h-3 relative w-full">
+                      <div
+                        className={`h-3 rounded-full ${isCurrentRound ? 'bg-green-600' : 'bg-gray-500'}`}
+                        style={{
+                          width: `${barWidth}%`,
+                          backgroundColor: isCurrentRound ? '#1c6d2a' : undefined,
+                        }}
+                      />
+                      <span className="absolute right-2 -top-0.5 text-xs font-medium text-white">
+                        {time > 0 ? formatTime(time) : '-'}
+                      </span>
                     </div>
                   );
                 })}
@@ -3113,8 +3336,12 @@ export default function WordPuzzleGame() {
           >
             <div className="flex items-center justify-between flex-shrink-0 p-4 sm:p-6 pb-3 border-b border-gray-200 bg-white z-10">
               <h2 id="contact-modal-title" className="text-lg font-bold text-left flex items-center gap-2">
-                <FontAwesomeIcon icon={faEnvelope} className="text-gray-600" />
-                Contact
+                <FontAwesomeIcon
+                  icon={contactModalMode === 'bug' ? faBug : faEnvelope}
+                  className="text-gray-600"
+                  aria-hidden
+                />
+                {contactModalMode === 'bug' ? 'Report a Bug' : 'Contact'}
               </h2>
               <button
                 type="button"
@@ -3335,13 +3562,28 @@ export default function WordPuzzleGame() {
         <footer
           className="text-center flex flex-col items-center gap-1.5 fixed bottom-0 left-0 right-0 z-[15] bg-white border-t border-gray-200 pt-2 pb-[max(8px,env(safe-area-inset-bottom,0px))]"
         >
-          <button
-            type="button"
-            onClick={() => setShowContact(true)}
-            className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2"
-          >
-            Contact
-          </button>
+          <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1">
+            <button
+              type="button"
+              onClick={() => {
+                setContactModalMode('contact');
+                setShowContact(true);
+              }}
+              className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2"
+            >
+              Contact
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setContactModalMode('bug');
+                setShowContact(true);
+              }}
+              className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2"
+            >
+              Report a Bug
+            </button>
+          </div>
           <p className="text-gray-500 italic text-sm leading-tight">© 2026 Davis English. All Rights Reserved.</p>
         </footer>
       )}
