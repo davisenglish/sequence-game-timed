@@ -108,7 +108,13 @@ const LS_DAILY = {
 /** Which Time Distribution bar (0–4) was incremented on the last win (green highlight in Statistics). */
 const LS_TIMED_LAST_DIST_BUCKET = 'stringlich_timed_lastDistBucket_v4';
 
-const TIME_DISTRIBUTION_LABELS = ['0–0.5 min', '0.5–1 min', '1–2 min', '2–3 min', '> 3 min'];
+const TIME_DISTRIBUTION_TIERS = [
+  { emoji: '🔥', label: '', sublabel: '< 30s' },
+  { emoji: '',   label: '',          sublabel: '30–60s' },
+  { emoji: '',   label: '',          sublabel: '1–2 min' },
+  { emoji: '',   label: '',          sublabel: '2–3 min' },
+  { emoji: '🐢', label: '', sublabel: '> 3 min' },
+];
 
 /** How many full-win times we keep and show under Fastest Times. */
 const FASTEST_TIMES_COUNT = 4;
@@ -132,6 +138,7 @@ function normalizeStatsTimeDistribution(raw) {
     td = td.map((n) => Math.max(0, Math.floor(Number(n) || 0)));
   }
   out.timeDistribution = td;
+  if (!Array.isArray(out.winTimes)) out.winTimes = [];
   return out;
 }
 
@@ -453,24 +460,138 @@ function toTitleCase(str) {
   return str.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** Profanity blocklist — whole-word match only; all entries are 5+ letters. */
+const SWEAR_WORDS = new Set([
+  'arsehole',
+  'assbandit',
+  'assclown',
+  'assface',
+  'asshat',
+  'asshole',
+  'assholes',
+  'asswipe',
+  'badass',
+  'bastard',
+  'bastards',
+  'beaner',
+  'beaners',
+  'bitch',
+  'bitches',
+  'bitching',
+  'bitchy',
+  'bitchass',
+  'bollocks',
+  'bullshit',
+  'chink',
+  'chinks',
+  'clusterfuck',
+  'cockbite',
+  'cockhead',
+  'cocksucker',
+  'cocksmoker',
+  'cumdump',
+  'cumguzzler',
+  'cumshot',
+  'cuntface',
+  'cunthole',
+  'damnit',
+  'dickbag',
+  'dickface',
+  'dickhead',
+  'dickwad',
+  'dickweed',
+  'dickweasel',
+  'dipshit',
+  'douche',
+  'douchebag',
+  'douchebags',
+  'dumbass',
+  'dumbasses',
+  'faggot',
+  'faggots',
+  'fuckboy',
+  'fucked',
+  'fucker',
+  'fuckers',
+  'fucking',
+  'fuckface',
+  'fuckhead',
+  'fuckoff',
+  'fuckstick',
+  'fucktard',
+  'fuckwad',
+  'fuckwit',
+  'goddam',
+  'goddammit',
+  'goddamn',
+  'goddamned',
+  'gooks',
+  'honkey',
+  'honky',
+  'horseshit',
+  'jackass',
+  'jackasses',
+  'jackoff',
+  'jerkoff',
+  'knobjockey',
+  'motherfucker',
+  'motherfuckers',
+  'motherfucking',
+  'nigga',
+  'niggas',
+  'nigger',
+  'niggers',
+  'pissant',
+  'pissed',
+  'pisser',
+  'pissing',
+  'pisshead',
+  'pussies',
+  'pussy',
+  'raghead',
+  'shitbag',
+  'shitbox',
+  'shitface',
+  'shithead',
+  'shitkicker',
+  'shitless',
+  'shitting',
+  'shitstorm',
+  'shitty',
+  'skank',
+  'skanks',
+  'skanky',
+  'sluts',
+  'slutty',
+  'smartass',
+  'spics',
+  'titfuck',
+  'titty',
+  'tranny',
+  'twats',
+  'wanker',
+  'wankers',
+  'wetback',
+  'wetbacks',
+  'whore',
+  'whores',
+  'whoring',
+  'whorehouse',
+]);
+
+function isSwearWord(word) {
+  const lower = String(word || '').trim().toLowerCase();
+  return lower.length >= 5 && SWEAR_WORDS.has(lower);
+}
+
 async function isValidWord(word) {
   // Reject hyphenated words
   if (word.includes('-')) return false;
-  
-  // Reject swear words and inappropriate content
-  const swearWords = [
-    'fuck', 'shit', 'bitch', 'ass', 'damn', 'hell', 'crap', 'piss', 'cock', 'dick', 'pussy', 'cunt',
-    'fucking', 'shitting', 'bitching', 'asshole', 'damned', 'hellish', 'crappy', 'pissing',
-    'fucker', 'shitty', 'bitchy', 'asshat', 'damnit', 'hellfire', 'crapper', 'pisser',
-    'motherfucker', 'bullshit', 'horseshit', 'dumbass', 'jackass', 'smartass', 'badass',
-    'fuckin', 'shitty', 'bitchin', 'asswipe', 'damnit', 'hellish', 'crappy', 'pissy'
-  ];
-  
-  const lowerWord = word.toLowerCase();
-  if (swearWords.includes(lowerWord)) return false;
+
+  if (isSwearWord(word)) return false;
 
   const wordSet = await loadWordList();
-  return wordSet.has(lowerWord);
+  return wordSet.has(String(word || '').trim().toLowerCase());
 }
 
 /** Raw answer list for a triplet (CSV or PREPROCESSED fallback). */
@@ -979,6 +1100,7 @@ export default function WordPuzzleGame() {
     maxStreak: 0,
     fastestTimes: [],
     averageTimes: [],
+    winTimes: [],
     lastWinPuzzleDate: null,
     timeDistribution: [0, 0, 0, 0, 0]
   });
@@ -1724,6 +1846,7 @@ export default function WordPuzzleGame() {
       if (!word) { setError(true); setErrorMessage('Please enter a word'); return; }
       if (word.length < 5) { setError(true); setErrorMessage('Must be 5+ letters long'); return; }
       if (!isSequential(word, letters)) { setError(true); setErrorMessage(`Word must contain '${letters}' in order`); return; }
+      if (isSwearWord(word)) { setError(true); setErrorMessage('Cuss words do not count'); return; }
       if (!(await isValidWord(word))) { setError(true); setErrorMessage('Word not found in list'); return; }
 
       const timeToRecord = gameTimeRef.current;
@@ -1895,6 +2018,7 @@ export default function WordPuzzleGame() {
     newStats.maxStreak = newStats.maxStreak || 0;
     newStats.fastestTimes = newStats.fastestTimes || [];
     newStats.averageTimes = newStats.averageTimes || [];
+    newStats.winTimes = Array.isArray(newStats.winTimes) ? newStats.winTimes : [];
     if (!Array.isArray(newStats.timeDistribution) || newStats.timeDistribution.length !== 5) {
       newStats.timeDistribution = [0, 0, 0, 0, 0];
     } else {
@@ -1932,6 +2056,7 @@ export default function WordPuzzleGame() {
     }
 
     if (isFullWin && timeForThisRound > 0) {
+      newStats.winTimes = [...newStats.winTimes, timeForThisRound];
       newStats.fastestTimes = newStats.fastestTimes.filter((t) => t !== timeForThisRound);
       newStats.fastestTimes.push(timeForThisRound);
       newStats.fastestTimes.sort((a, b) => a - b);
@@ -2127,6 +2252,7 @@ export default function WordPuzzleGame() {
       maxStreak: 0,
       fastestTimes: [],
       averageTimes: [],
+      winTimes: [],
       lastWinPuzzleDate: null,
       timeDistribution: [0, 0, 0, 0, 0]
     });
@@ -2487,8 +2613,7 @@ export default function WordPuzzleGame() {
                       <div className="min-w-0 w-full border-t border-gray-200/90 pt-2 min-[400px]:border-t-0 min-[400px]:border-l min-[400px]:border-gray-200/90 min-[400px]:pt-0 min-[400px]:pl-3">
                         <details className="group rounded-md border border-transparent px-3 py-2.5 open:border-gray-200/70 open:bg-white/50 transition-colors">
                           <summary
-                            className="flex cursor-pointer list-none items-center justify-between gap-2 text-left [&::-webkit-details-marker]:hidden"
-                            style={{ fontSize: 'calc(0.875rem * 0.48 + 6pt * 0.48)' }}
+                            className="flex cursor-pointer list-none items-center justify-between gap-2 text-left [&::-webkit-details-marker]:hidden text-xs"
                           >
                             <span className="font-medium text-gray-500">Possible answers</span>
                             <FontAwesomeIcon
@@ -2551,7 +2676,7 @@ export default function WordPuzzleGame() {
               boxShadow: '0 4px 16px rgba(0, 0, 0, 0.2)'
             };
             return (
-              <div key={idx} style={style} className="hover:scale-105 transition-transform duration-200 relative">
+              <div key={idx} style={style} className="relative">
                 {shape === 'diamond' ? (
                   <span style={{
                     position: 'absolute',
@@ -2866,13 +2991,34 @@ export default function WordPuzzleGame() {
                 const popupGap = 4;
                 const keyBg = '#e5e7eb';
                 const triUpper = (letters && String(letters).toUpperCase()) || '';
-                const mobileProvidedLetterBg = {};
+                // Build a map of letter → array of position colors (in order), allowing duplicates
+                const mobileProvidedLetterColors = {};
                 for (let i = 0; i < Math.min(3, triUpper.length); i++) {
                   const c = triUpper[i];
-                  if (c && mobileProvidedLetterBg[c] === undefined) {
-                    mobileProvidedLetterBg[c] = shapes[i].color;
+                  if (c) {
+                    if (!mobileProvidedLetterColors[c]) mobileProvidedLetterColors[c] = [];
+                    mobileProvidedLetterColors[c].push(shapes[i].color);
                   }
                 }
+                // Returns a CSS `background` value: solid color for 1, hard-stop gradient for 2–3
+                const buildKeyGradient = (colors) => {
+                  if (!colors || colors.length === 0) return null;
+                  if (colors.length === 1) return colors[0];
+                  const n = colors.length;
+                  const stops = [];
+                  colors.forEach((c, i) => {
+                    const startPct = (i / n * 100).toFixed(4) + '%';
+                    const endPct = ((i + 1) / n * 100).toFixed(4) + '%';
+                    if (i === 0) {
+                      stops.push(`${c} ${endPct}`);
+                    } else if (i === n - 1) {
+                      stops.push(`${c} ${startPct}`);
+                    } else {
+                      stops.push(`${c} ${startPct}`, `${c} ${endPct}`);
+                    }
+                  });
+                  return `linear-gradient(to right, ${stops.join(', ')})`;
+                };
                 const findNearestIndexByCenters = (x, widths, gap) => {
                   let cursor = 0;
                   let bestIndex = 0;
@@ -2994,8 +3140,9 @@ export default function WordPuzzleGame() {
             {/* Top row: Q-P */}
             <div className="flex justify-center relative flex-nowrap" style={{ gap: gapPx, marginBottom: rowGapPx }} onPointerDown={handleTopRowBackgroundPointerDown} onPointerUp={handleTopRowPointerUpOrCancel} onPointerCancel={handleTopRowPointerUpOrCancel}>
               {['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'].map((letter) => {
-                const provBg = mobileProvidedLetterBg[letter];
-                const popBg = provBg || keyBg;
+                const provColors = mobileProvidedLetterColors[letter];
+                const provBg = buildKeyGradient(provColors);
+                const popBg = (provColors && provColors[0]) || keyBg;
                 const popFg = provBg ? '#ffffff' : '#1f2937';
                 return (
                 <div key={letter} style={{ position: 'relative', width: letterW, height: letterH, flexShrink: 0, overflow: 'visible' }}>
@@ -3029,7 +3176,7 @@ export default function WordPuzzleGame() {
                       position: 'relative',
                       zIndex: 2,
                       pointerEvents: 'auto',
-                      ...(provBg ? { backgroundColor: provBg } : {}),
+                      ...(provBg ? { background: provBg } : {}),
                     }}
                   >
                     {pressedKey === letter ? '' : letter}
@@ -3047,8 +3194,9 @@ export default function WordPuzzleGame() {
             {/* Middle row: A-L */}
             <div className="flex justify-center relative flex-nowrap" style={{ gap: gapPx, marginBottom: rowGapPx }} onPointerDown={handleMiddleRowBackgroundPointerDown} onPointerUp={handleMiddleRowPointerUpOrCancel} onPointerCancel={handleMiddleRowPointerUpOrCancel}>
               {['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'].map((letter) => {
-                const provBg = mobileProvidedLetterBg[letter];
-                const popBg = provBg || keyBg;
+                const provColors = mobileProvidedLetterColors[letter];
+                const provBg = buildKeyGradient(provColors);
+                const popBg = (provColors && provColors[0]) || keyBg;
                 const popFg = provBg ? '#ffffff' : '#1f2937';
                 return (
                 <div key={letter} style={{ position: 'relative', width: letterW, height: letterH, flexShrink: 0, overflow: 'visible' }}>
@@ -3082,7 +3230,7 @@ export default function WordPuzzleGame() {
                       position: 'relative',
                       zIndex: 2,
                       pointerEvents: 'auto',
-                      ...(provBg ? { backgroundColor: provBg } : {}),
+                      ...(provBg ? { background: provBg } : {}),
                     }}
                   >
                     {pressedKey === letter ? '' : letter}
@@ -3143,8 +3291,9 @@ export default function WordPuzzleGame() {
                 </button>
               </div>
               {['Z', 'X', 'C', 'V', 'B', 'N', 'M'].map((letter) => {
-                const provBg = mobileProvidedLetterBg[letter];
-                const popBg = provBg || keyBg;
+                const provColors = mobileProvidedLetterColors[letter];
+                const provBg = buildKeyGradient(provColors);
+                const popBg = (provColors && provColors[0]) || keyBg;
                 const popFg = provBg ? '#ffffff' : '#1f2937';
                 return (
                 <div key={letter} style={{ position: 'relative', width: letterW, height: letterH, flexShrink: 0, overflow: 'visible' }}>
@@ -3178,7 +3327,7 @@ export default function WordPuzzleGame() {
                       position: 'relative',
                       zIndex: 2,
                       pointerEvents: 'auto',
-                      ...(provBg ? { backgroundColor: provBg } : {}),
+                      ...(provBg ? { background: provBg } : {}),
                     }}
                   >
                     {pressedKey === letter ? '' : letter}
@@ -3387,12 +3536,29 @@ export default function WordPuzzleGame() {
                       <span>Congratulations!</span>
                       <span aria-hidden className="select-none">🎉</span>
                     </div>
-                    <p className="text-sm text-center">
+                    <p className="text-base font-semibold text-center mb-1">
                       <span className="text-gray-600">Final Time:</span>{' '}
-                      <span className="font-semibold text-green-700 tabular-nums">
+                      <span className="text-green-700 tabular-nums">
                         {formatTime(gameOver && finalGameTimeRef.current != null ? finalGameTimeRef.current : gameTime)}
                       </span>
                     </p>
+                    {(() => {
+                      const winTimes = Array.isArray(stats.winTimes) ? stats.winTimes : [];
+                      if (winTimes.length < 2) return null;
+                      const currentTime = gameOver && finalGameTimeRef.current != null ? finalGameTimeRef.current : gameTime;
+                      const prevTimes = winTimes.slice(0, -1);
+                      const avg = Math.round(prevTimes.reduce((s, t) => s + t, 0) / prevTimes.length);
+                      const diff = Math.abs(currentTime - avg);
+                      const faster = currentTime < avg;
+                      return (
+                        <p className="text-sm text-center text-gray-600">
+                          <span className="font-medium">
+                            {formatTime(diff)} {faster ? 'faster' : 'slower'}
+                          </span>{' '}
+                          than average
+                        </p>
+                      );
+                    })()}
                   </div>
                 ) : (
                   <div className="text-lg font-semibold text-gray-600 flex items-center justify-center gap-2 flex-wrap">
@@ -3405,7 +3571,7 @@ export default function WordPuzzleGame() {
             )}
             
             {/* Stats Grid */}
-            <div className="grid grid-cols-5 gap-2 mb-3 sm:mb-3">
+            <div className="grid grid-cols-4 gap-2 mb-3 sm:mb-3">
               <div className="text-center">
                 <div className="text-xl sm:text-2xl font-bold">{stats.gamesPlayed}</div>
                 <div className="text-xs text-gray-600 leading-tight">
@@ -3413,21 +3579,14 @@ export default function WordPuzzleGame() {
                 </div>
               </div>
               <div className="text-center">
-                <div className="text-xl sm:text-2xl font-bold">{stats.gamesWon}</div>
-                <div className="text-xs text-gray-600 leading-tight">
-                  <span className="block">Games</span>
-                  <span className="block">Won</span>
-                </div>
-              </div>
-              <div className="text-center">
                 <div className="text-xl sm:text-2xl font-bold">
-                  {stats.gamesPlayed > 0 ? Math.round((stats.gamesWon / stats.gamesPlayed) * 100) : 0}%
+                  {stats.gamesPlayed > 0 ? Math.round((stats.gamesWon / stats.gamesPlayed) * 100) : 0}
                 </div>
                 <div className="text-xs text-gray-600">Win %</div>
               </div>
               <div className="text-center">
                 <div className="text-xl sm:text-2xl font-bold">{stats.currentStreak}</div>
-                <div className="text-xs text-gray-600">Streak</div>
+                <div className="text-xs text-gray-600">Current Streak</div>
               </div>
               <div className="text-center">
                 <div className="text-xl sm:text-2xl font-bold">{stats.maxStreak || 0}</div>
@@ -3438,15 +3597,12 @@ export default function WordPuzzleGame() {
               </div>
             </div>
 
-            {/* Time Distribution — same bar pattern as ver2 “Correct Answers” */}
-            <div className="mb-3 sm:mb-3">
-              <h3 className="text-sm font-semibold mb-1 flex justify-center items-center gap-1.5">
-                <span className="text-base leading-none" aria-hidden>
-                  ⏳
-                </span>
+            {/* Time Distribution */}
+            <div className="mb-3 sm:mb-6">
+              <h3 className="text-sm font-semibold mb-2 flex justify-center items-center gap-1.5">
                 Time Distribution
               </h3>
-              <div className="grid grid-cols-[max-content_1fr] gap-x-1.5 gap-y-0.5 items-center">
+              <div className="grid grid-cols-[max-content_1fr] gap-x-2.5 gap-y-1 items-center">
                 {(() => {
                   const td =
                     stats.timeDistribution && stats.timeDistribution.length === 5
@@ -3458,65 +3614,39 @@ export default function WordPuzzleGame() {
                     if (raw != null) lastB = parseInt(raw, 10);
                   } catch (_) {}
                   const maxC = Math.max(...td, 1);
-                  return TIME_DISTRIBUTION_LABELS.map((label, idx) => {
+                  return TIME_DISTRIBUTION_TIERS.map(({ emoji, label, sublabel }, idx) => {
                     const count = td[idx] || 0;
                     const isHighlight = !Number.isNaN(lastB) && lastB === idx;
                     const barWidth = count > 0 ? (count / maxC) * 100 : 10;
                     return (
-                      <React.Fragment key={label}>
-                        <span className="text-xs font-medium text-gray-700 leading-tight text-right whitespace-nowrap tabular-nums">
-                          {label}
-                        </span>
-                        <div className="min-w-0 bg-gray-300 rounded-full h-3 relative">
+                      <React.Fragment key={idx}>
+                        <div className="flex items-center gap-1 justify-end">
+                          {emoji ? (
+                            <span className="text-xl leading-none select-none" aria-hidden>{emoji}</span>
+                          ) : (
+                            <span className="w-6 shrink-0" />
+                          )}
+                          <div className="text-right leading-none">
+                            <div className="text-xs font-medium text-gray-700 whitespace-nowrap">{label}</div>
+                            <div className="text-xs text-gray-400 whitespace-nowrap mt-0.5">{sublabel}</div>
+                          </div>
+                        </div>
+                        <div className="min-w-0 bg-gray-300 rounded-full h-5 relative">
                           {count > 0 && (
                             <div
-                              className={`h-3 rounded-full ${isHighlight ? 'bg-green-600' : 'bg-gray-500'}`}
+                              className={`h-5 rounded-full ${isHighlight ? 'bg-green-600' : 'bg-gray-500'}`}
                               style={{
                                 width: `${barWidth}%`,
                                 backgroundColor: isHighlight ? '#1c6d2a' : undefined,
                               }}
                             />
                           )}
-                          <span className="absolute right-2 -top-0.5 text-xs font-medium text-white">{count}</span>
+                          <span className="absolute right-2 top-0 bottom-0 flex items-center text-xs font-medium text-white">{count}</span>
                         </div>
                       </React.Fragment>
                     );
                   });
                 })()}
-              </div>
-            </div>
-            
-            {/* Fastest Times */}
-            <div className="mb-3 sm:mb-6">
-              <h3 className="text-sm font-semibold mb-1 flex justify-center items-center gap-1.5">
-                <span className="text-base leading-none" aria-hidden>
-                  ⚡
-                </span>
-                Fastest Times
-              </h3>
-              <div className="space-y-1.5">
-                {Array.from({ length: FASTEST_TIMES_COUNT }, (_, i) => i + 1).map((position) => {
-                  const time = (stats.fastestTimes && stats.fastestTimes[position - 1]) || 0;
-                  const currentRoundTime = parseInt(localStorage.getItem('currentRoundTimeTimed') || '0');
-                  const isCurrentRound = time === currentRoundTime && time > 0;
-                  const maxTime = Math.max(...(stats.fastestTimes || []), 1);
-                  const barWidth = time > 0 ? (time / maxTime) * 100 : 10;
-                  
-                  return (
-                    <div key={position} className="bg-gray-300 rounded-full h-3 relative w-full">
-                      <div
-                        className={`h-3 rounded-full ${isCurrentRound ? 'bg-green-600' : 'bg-gray-500'}`}
-                        style={{
-                          width: `${barWidth}%`,
-                          backgroundColor: isCurrentRound ? '#1c6d2a' : undefined,
-                        }}
-                      />
-                      <span className="absolute right-2 -top-0.5 text-xs font-medium text-white">
-                        {time > 0 ? formatTime(time) : '-'}
-                      </span>
-                    </div>
-                  );
-                })}
               </div>
             </div>
 
