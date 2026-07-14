@@ -209,6 +209,36 @@ function hashStringToInt(str) {
   return Math.abs(h);
 }
 
+/** Wang hash — good avalanche properties so adjacent integers scatter widely. */
+function wangHash(n) {
+  n = ((n ^ 61) ^ (n >>> 16)) >>> 0;
+  n = (n + (n << 3)) >>> 0;
+  n = (n ^ (n >>> 4)) >>> 0;
+  n = Math.imul(n, 0x27d4eb2d) >>> 0;
+  n = (n ^ (n >>> 15)) >>> 0;
+  return n;
+}
+
+/** Convert "YYYY-MM-DD" to days since Unix epoch (integer). */
+function dateStrToEpochDay(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return Math.floor(Date.UTC(y, m - 1, d) / 86400000);
+}
+
+/** Weighted select using a pre-computed integer seed (skips hashStringToInt). */
+function deterministicWeightedSelectByInt(items, seedInt) {
+  if (!items || items.length === 0) return null;
+  const totalWeight = items.reduce((sum, it) => sum + Math.max(0, Number(it.frequency) || 0), 0);
+  if (totalWeight <= 0) return items[0] ?? null;
+  let r = seedInt % totalWeight;
+  for (const it of items) {
+    const w = Math.max(0, Number(it.frequency) || 0);
+    if (r < w) return it;
+    r -= w;
+  }
+  return items[items.length - 1];
+}
+
 /** Same seed ⇒ same order for all players sharing this calendar day + triplet (matches daily puzzle identity). */
 function sortAnswersDeterministic(answers, seedKey) {
   return [...answers].sort((a, b) => {
@@ -296,35 +326,42 @@ function deterministicDailyTripletPickForLevel(data, level, puzzleDateStr, attem
   const midFreqGroup = data.filter((item) => item.frequency >= 20 && item.frequency <= 56);
   const lowFreqGroup = data.filter((item) => item.frequency >= 5 && item.frequency <= 20);
 
-  const seedA = `stringlich-timed-daily-${puzzleDateStr}-L${level}-try${attemptSalt}`;
-  const coin1 = hashStringToInt(`${seedA}-coin1`) % 2;
-  const coin3 = hashStringToInt(`${seedA}-coin3`) % 2;
+  // Wang-hash the epoch day so adjacent dates scatter widely rather than walking
+  // the frequency-weighted pool one step at a time (the old djb2 string hash bug).
+  const epochDay = dateStrToEpochDay(puzzleDateStr);
+  const base = wangHash(epochDay);
+
+  // Derive per-purpose seeds by mixing in level, attemptSalt, and a unique offset.
+  const mkSeed = (offset) => wangHash(base + level * 100003 + attemptSalt * 9973 + offset);
+
+  const coin1 = mkSeed(1) % 2;
+  const coin3 = mkSeed(3) % 2;
 
   let selected = null;
   if (level === 1) {
     if (coin1 === 0 && highFreqGroup.length > 0) {
-      selected = deterministicWeightedSelect(highFreqGroup, `${seedA}-high`);
+      selected = deterministicWeightedSelectByInt(highFreqGroup, mkSeed(10));
     } else if (midFreqGroup.length > 0) {
-      selected = deterministicWeightedSelect(midFreqGroup, `${seedA}-mid`);
+      selected = deterministicWeightedSelectByInt(midFreqGroup, mkSeed(20));
     } else if (highFreqGroup.length > 0) {
-      selected = deterministicWeightedSelect(highFreqGroup, `${seedA}-high2`);
+      selected = deterministicWeightedSelectByInt(highFreqGroup, mkSeed(11));
     }
   } else if (level === 2) {
     if (midFreqGroup.length > 0) {
-      selected = deterministicWeightedSelect(midFreqGroup, `${seedA}-mid`);
+      selected = deterministicWeightedSelectByInt(midFreqGroup, mkSeed(20));
     }
   } else {
     if (coin3 === 0 && midFreqGroup.length > 0) {
-      selected = deterministicWeightedSelect(midFreqGroup, `${seedA}-mid`);
+      selected = deterministicWeightedSelectByInt(midFreqGroup, mkSeed(20));
     } else if (lowFreqGroup.length > 0) {
-      selected = deterministicWeightedSelect(lowFreqGroup, `${seedA}-low`);
+      selected = deterministicWeightedSelectByInt(lowFreqGroup, mkSeed(30));
     } else if (midFreqGroup.length > 0) {
-      selected = deterministicWeightedSelect(midFreqGroup, `${seedA}-mid2`);
+      selected = deterministicWeightedSelectByInt(midFreqGroup, mkSeed(21));
     }
   }
 
   if (!selected) {
-    selected = deterministicWeightedSelect(filteredData, `${seedA}-fallback`);
+    selected = deterministicWeightedSelectByInt(filteredData, mkSeed(99));
   }
   if (!selected) return null;
   const letters = selected.letters;
