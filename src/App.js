@@ -1038,7 +1038,7 @@ function TimedRulesModal({
                 </li>
                 <li className="flex gap-2 items-start">
                   <span className="flex-shrink-0 select-none leading-snug" aria-hidden>❌</span>
-                  <span>4 mistakes per level</span>
+                  <span>4 mistakes per round</span>
                 </li>
                 <li className="flex gap-2 items-start">
                   <span className="flex-shrink-0 select-none leading-snug" aria-hidden>🤬</span>
@@ -1046,7 +1046,7 @@ function TimedRulesModal({
                 </li>
                 <li className="flex gap-2 items-start">
                   <span className="flex-shrink-0 select-none leading-snug" aria-hidden>🎉</span>
-                  <span className="font-medium">Complete all 3 levels to win!</span>
+                  <span className="font-medium">Complete all 3 rounds to win!</span>
                 </li>
               </ul>
             )}
@@ -1111,6 +1111,58 @@ function TimedRulesModal({
         </div>
       </div>
     </div>
+  );
+}
+
+/** Full-screen celebration: emojis drift slowly up and off the top of the screen over ~3.5s. Sits above the modal. */
+function FloatingEmojis({ emojis, onDone }) {
+  const particles = React.useMemo(() => {
+    return Array.from({ length: 22 }, (_, i) => ({
+      id: i,
+      emoji: emojis[Math.floor(Math.random() * emojis.length)],
+      left: `${3 + Math.random() * 94}%`,
+      delay: Math.random() * 1.1,
+      size: 1.4 + Math.random() * 1.0,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  React.useEffect(() => {
+    const t = setTimeout(onDone, 4800);
+    return () => clearTimeout(t);
+  }, [onDone]);
+
+  return (
+    <>
+      <style>{`
+        @keyframes emojiFloatUp {
+          0%   { transform: translateY(0); opacity: 1; }
+          72%  { opacity: 1; }
+          100% { transform: translateY(-115vh); opacity: 0; }
+        }
+      `}</style>
+      <div
+        style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 999999, overflow: 'hidden' }}
+        aria-hidden="true"
+      >
+        {particles.map(({ id, emoji, left, delay, size }) => (
+          <span
+            key={id}
+            style={{
+              position: 'absolute',
+              bottom: '-8%',
+              left,
+              fontSize: `${size}rem`,
+              animation: `emojiFloatUp 3.5s ${delay}s ease-out forwards`,
+              lineHeight: 1,
+              userSelect: 'none',
+            }}
+          >
+            {emoji}
+          </span>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -1191,6 +1243,8 @@ export default function WordPuzzleGame() {
   });
   const [showGiveUpConfirm, setShowGiveUpConfirm] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
+  /** When set, the full-screen 🥳🎉 celebration plays once (only on a full 3-level win). */
+  const [celebrationEmojis, setCelebrationEmojis] = useState(null);
   /** Wrong guesses left on the current level (resets to MISTAKES_PER_LEVEL each level). At 0 → game over. */
   const [mistakesRemaining, setMistakesRemaining] = useState(MISTAKES_PER_LEVEL);
   /** Index of the dot currently playing the shrink-out animation, or null. */
@@ -1974,7 +2028,11 @@ export default function WordPuzzleGame() {
           hintCharsRevealed,
         });
         setDailyUiEpoch((e) => e + 1);
-        setTimeout(() => openStatsModal(), 500);
+        const fullWin = mergedResults.length === 3 && mergedResults.every((r) => r.word && !r.gaveUp);
+        setTimeout(() => {
+          openStatsModal();
+          if (fullWin) setCelebrationEmojis(['🥳', '🎉']);
+        }, 500);
       } else {
         setIsTransitioning(true);
 
@@ -3663,9 +3721,9 @@ export default function WordPuzzleGame() {
                   </div>
                 ) : (
                   <div className="text-lg font-semibold text-gray-600 flex items-center justify-center gap-2 flex-wrap">
-                    <span aria-hidden className="select-none">☘️</span>
+                    <span aria-hidden className="select-none">🍀</span>
                     <span>Better Luck Next Time!</span>
-                    <span aria-hidden className="select-none">☘️</span>
+                    <span aria-hidden className="select-none">🍀</span>
                   </div>
                 )}
               </div>
@@ -4041,7 +4099,15 @@ export default function WordPuzzleGame() {
           animation: mistakeDotOut 0.3s ease-in-out forwards;
         }
       `}</style>
-      
+
+      {/* Full-screen 🥳🎉 celebration — plays once on a full 3-level win, above the stats modal */}
+      {celebrationEmojis && (
+        <FloatingEmojis
+          emojis={celebrationEmojis}
+          onDone={() => setCelebrationEmojis(null)}
+        />
+      )}
+
       {/* Footer - hidden on mobile during gameplay when keyboard is shown */}
       {footerBarVisible && (
         <footer
