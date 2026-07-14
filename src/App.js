@@ -108,6 +108,9 @@ const LS_DAILY = {
 /** Which Time Distribution bar (0–4) was incremented on the last win (green highlight in Statistics). */
 const LS_TIMED_LAST_DIST_BUCKET = 'stringlich_timed_lastDistBucket_v4';
 
+/** Wrong guesses allowed per level before the game ends. Only "real" mistakes count (see handleSubmit). */
+const MISTAKES_PER_LEVEL = 4;
+
 const TIME_DISTRIBUTION_TIERS = [
   { emoji: '🔥', label: '', sublabel: '< 30s' },
   { emoji: '',   label: '',          sublabel: '30–60s' },
@@ -1031,7 +1034,11 @@ function TimedRulesModal({
               <ul className="list-none space-y-4 pl-0">
                 <li className="flex gap-2 items-start">
                   <span className="flex-shrink-0 select-none leading-snug" aria-hidden>🖐️</span>
-                  <span>Guesses must contain 5+ letters</span>
+                  <span>Guesses must have 5+ letters</span>
+                </li>
+                <li className="flex gap-2 items-start">
+                  <span className="flex-shrink-0 select-none leading-snug" aria-hidden>❌</span>
+                  <span>4 mistakes per level</span>
                 </li>
                 <li className="flex gap-2 items-start">
                   <span className="flex-shrink-0 select-none leading-snug" aria-hidden>🤬</span>
@@ -1184,6 +1191,15 @@ export default function WordPuzzleGame() {
   });
   const [showGiveUpConfirm, setShowGiveUpConfirm] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
+  /** Wrong guesses left on the current level (resets to MISTAKES_PER_LEVEL each level). At 0 → game over. */
+  const [mistakesRemaining, setMistakesRemaining] = useState(MISTAKES_PER_LEVEL);
+  /** Index of the dot currently playing the shrink-out animation, or null. */
+  const [mistakeAnimIndex, setMistakeAnimIndex] = useState(null);
+  const mistakesRemainingRef = useRef(MISTAKES_PER_LEVEL);
+  /** Lowercased words already counted as a mistake this level → re-guessing shows "Already guessed" (no penalty). */
+  const guessedMistakeWordsRef = useRef([]);
+  /** True during the 0.3s dot shrink animation; blocks new submits so decrements can't race. */
+  const mistakeAnimatingRef = useRef(false);
   const [pressedKey, setPressedKey] = useState(null);
   const [hintWord, setHintWord] = useState(null); // full hint word once any hint used (game over / give up)
   /** Full word chosen for this level’s progressive hints (first possible answer); loaded when `letters` changes */
@@ -1259,6 +1275,10 @@ export default function WordPuzzleGame() {
               setHintWord(o.hintWord ?? null);
               setHintTargetWord(o.hintTargetWord ?? null);
               setHintCharsRevealed(o.hintCharsRevealed ?? 0);
+              const savedMistakes = Math.max(0, Math.min(MISTAKES_PER_LEVEL, Number(o.mistakesRemaining ?? MISTAKES_PER_LEVEL)));
+              mistakesRemainingRef.current = savedMistakes;
+              setMistakesRemaining(savedMistakes);
+              guessedMistakeWordsRef.current = Array.isArray(o.guessedMistakeWords) ? o.guessedMistakeWords : [];
               setRoundStarted(true);
               setRevealAnimationPlayedThisRound(true);
               setShowRevealAnimation(false);
@@ -1390,6 +1410,8 @@ export default function WordPuzzleGame() {
       hintWord,
       hintTargetWord,
       hintCharsRevealed,
+      mistakesRemaining,
+      guessedMistakeWords: guessedMistakeWordsRef.current,
     };
     try {
       localStorage.setItem(LS_DAILY.inProgress, JSON.stringify(payload));
@@ -1406,6 +1428,7 @@ export default function WordPuzzleGame() {
     hintWord,
     hintTargetWord,
     hintCharsRevealed,
+    mistakesRemaining,
   ]);
 
   // New puzzle when the user's local calendar day changes
@@ -1446,6 +1469,7 @@ export default function WordPuzzleGame() {
       inputValueRef.current = '';
       setError(false);
       setErrorMessage('');
+      resetMistakesForLevel();
       setHintWord(null);
       setHintTargetWord(null);
       setHintCharsRevealed(0);
@@ -1520,10 +1544,8 @@ export default function WordPuzzleGame() {
       clearHintTimers();
       return clearHintTimers;
     }
-    // More partial hints remain until the full hint word has been revealed (timer can run while target is still loading).
-    const hintExhausted =
-      hintTargetWord != null &&
-      hintCharsRevealed >= hintTargetWord.length;
+    // One hint per level: once used (hintWord set), the timer stops and never restarts this level.
+    const hintExhausted = hintWord != null;
     // Defer start to the next task so sibling [letters] effects can schedule setHintFillProgress(0) / setHintAvailable(false)
     // first — otherwise we often read stale hintFillProgress === 100 and never start the interval.
     let startTimerToken = null;
@@ -1537,10 +1559,7 @@ export default function WordPuzzleGame() {
         if (!roundStarted || gameOver || !letters) return;
         if (!isPageVisible) return;
         if (hintFillIntervalRef.current) return;
-        const exhausted =
-          hintTargetWord != null &&
-          hintCharsRevealed >= hintTargetWord.length;
-        if (exhausted) return;
+        if (hintWord != null) return;
         if (!(rulesDismissedOnceRef.current || !showRules)) return;
         startHintFillTimer(false);
         hintTimerStartedThisRoundRef.current = true;
@@ -1557,7 +1576,7 @@ export default function WordPuzzleGame() {
     isPageVisible,
     hintAvailable,
     hintTargetWord,
-    hintCharsRevealed
+    hintWord
   ]);
 
   // Keep inputValueRef in sync with input state so mobile Submit always has a source of truth
@@ -1667,6 +1686,7 @@ export default function WordPuzzleGame() {
     setRevealAnimationPlayedThisRound(false);
     setError(false);
     setErrorMessage('');
+    resetMistakesForLevel();
     // Start the game after the reveal animation completes
     setTimeout(() => {
       rulesDismissedOnceRef.current = false;
@@ -1867,9 +1887,38 @@ export default function WordPuzzleGame() {
     closeContactModal();
   };
 
+  /** Fresh set of mistakes at the start of a level (or on restore, pass the saved value). */
+  const resetMistakesForLevel = (remaining = MISTAKES_PER_LEVEL) => {
+    const val = Math.max(0, Math.min(MISTAKES_PER_LEVEL, Number(remaining)));
+    mistakesRemainingRef.current = val;
+    setMistakesRemaining(val);
+    guessedMistakeWordsRef.current = [];
+    mistakeAnimatingRef.current = false;
+    setMistakeAnimIndex(null);
+  };
+
+  /** Record a wrong guess: remember the word, animate a dot away, then decrement (ending the game at 0). */
+  const registerMistake = (word) => {
+    guessedMistakeWordsRef.current = [...guessedMistakeWordsRef.current, word];
+    mistakeAnimatingRef.current = true;
+    setMistakeAnimIndex(mistakesRemainingRef.current - 1);
+    setTimeout(() => {
+      const remaining = Math.max(0, mistakesRemainingRef.current - 1);
+      mistakesRemainingRef.current = remaining;
+      setMistakesRemaining(remaining);
+      setMistakeAnimIndex(null);
+      mistakeAnimatingRef.current = false;
+      if (remaining <= 0) {
+        // Small beat after the last dot vanishes before the end screen takes over.
+        setTimeout(() => handleEndGame(), 500);
+      }
+    }, 300);
+  };
+
   const handleSubmit = async (e, valueFromMobile) => {
     e.preventDefault();
     if (!roundStarted || gameOver || isTransitioning) return;
+    if (mistakeAnimatingRef.current) return;
     if (isSubmittingRef.current) return;
     isSubmittingRef.current = true;
     try {
@@ -1881,10 +1930,15 @@ export default function WordPuzzleGame() {
         : input;
       const word = currentInput.trim().toLowerCase();
       if (!word) { setError(true); setErrorMessage('Please enter a word'); return; }
+      // A word that already cost a mistake this level can't cost another — just flag it.
+      if (guessedMistakeWordsRef.current.includes(word)) { setError(true); setErrorMessage('Already guessed'); return; }
       if (word.length < 5) { setError(true); setErrorMessage('Must be 5+ letters long'); return; }
-      if (!isSequential(word, letters)) { setError(true); setErrorMessage(`Word must contain '${letters}' in order`); return; }
+      // Wrong letter order → counts as a mistake (uses a guess).
+      if (!isSequential(word, letters)) { setError(true); setErrorMessage(`Word must contain '${letters}' in order`); registerMistake(word); return; }
+      // Swear words with letters in order don't count and don't cost a guess.
       if (isSwearWord(word)) { setError(true); setErrorMessage('Cuss words do not count'); return; }
-      if (!(await isValidWord(word))) { setError(true); setErrorMessage('Word not found in list'); return; }
+      // Not a real word → counts as a mistake (uses a guess).
+      if (!(await isValidWord(word))) { setError(true); setErrorMessage('Word not found in list'); registerMistake(word); return; }
 
       const timeToRecord = gameTimeRef.current;
       const levelResult = {
@@ -1928,6 +1982,7 @@ export default function WordPuzzleGame() {
           const nextLevel = currentLevel + 1;
           setLetters(allLevelLetters[nextLevel - 1]);
           setCurrentLevel(nextLevel);
+          resetMistakesForLevel();
 
           setTimeout(() => {
             setIsTransitioning(false);
@@ -2026,6 +2081,7 @@ export default function WordPuzzleGame() {
     setIsTransitioning(false);
     setError(false);
     setErrorMessage('');
+    resetMistakesForLevel();
     setHintWord(null);
     setHintTargetWord(null);
     setHintCharsRevealed(0);
@@ -2297,17 +2353,10 @@ export default function WordPuzzleGame() {
 
   const handleHint = async () => {
     if (isTransitioning || !letters) return;
-    let target = hintTargetWord;
-    if (!target) {
-      target = await getDailyHintWord(letters, getLocalDateString());
-      if (target) setHintTargetWord(target);
-    }
-    if (!target) return;
-
-    const len = target.length;
-    if (hintCharsRevealed >= len) {
+    // One hint per level: once used, it's inactive and re-clicking just reminds them of the letters shown.
+    if (hintWord) {
       setError(true);
-      setErrorMessage(`Hint is a valid word - ${target.toUpperCase()}`);
+      setErrorMessage(`Hint already used - ${hintWord.slice(0, 3).toUpperCase()}`);
       return;
     }
     if (!hintAvailable) {
@@ -2315,15 +2364,17 @@ export default function WordPuzzleGame() {
       setErrorMessage('Hint available after 30 seconds');
       return;
     }
+    let target = hintTargetWord;
+    if (!target) {
+      target = await getDailyHintWord(letters, getLocalDateString());
+      if (target) setHintTargetWord(target);
+    }
+    if (!target) return;
 
-    const nextLen =
-      hintCharsRevealed === 0
-        ? Math.min(3, len)
-        : Math.min(hintCharsRevealed + 1, len);
-
-    const hintVal = target.slice(0, nextLen).toLowerCase();
-    setHintCharsRevealed(nextLen);
-    if (!hintWord) setHintWord(target);
+    const revealLen = Math.min(3, target.length);
+    const hintVal = target.slice(0, revealLen).toLowerCase();
+    setHintCharsRevealed(revealLen);
+    setHintWord(target);
 
     inputValueRef.current = hintVal;
     setInput(hintVal);
@@ -2333,14 +2384,8 @@ export default function WordPuzzleGame() {
     setTimeout(() => setHintRevealAnimating(false), 300);
 
     clearHintTimers();
-    if (nextLen < len) {
-      setHintAvailable(false);
-      setHintFillProgress(0);
-      startHintFillTimer(true);
-    } else {
-      setHintAvailable(false);
-      setHintFillProgress(100);
-    }
+    setHintAvailable(false);
+    setHintFillProgress(100);
   };
 
   const formatTime = (seconds) => {
@@ -2437,9 +2482,11 @@ export default function WordPuzzleGame() {
           <div className="fixed top-0 left-0 right-0 z-30 bg-white border-b border-gray-200">
             <div className="max-w-xl mx-auto px-6 py-2 flex items-center">
             <div className="flex-1 min-w-0 flex items-center">
-              <span className="text-base font-semibold text-gray-600 tabular-nums border border-gray-300 rounded px-2 py-1 bg-gray-50">
-                {formatTime(gameOver && finalGameTimeRef.current != null ? finalGameTimeRef.current : gameTime)}
-              </span>
+              {(!gameOver || levelResults.every((r) => !r.gaveUp)) && (
+                <span className="text-base font-semibold text-gray-600 tabular-nums border border-gray-300 rounded px-2 py-1 bg-gray-50">
+                  {formatTime(gameOver && finalGameTimeRef.current != null ? finalGameTimeRef.current : gameTime)}
+                </span>
+              )}
             </div>
             <div className="flex items-center justify-center flex-shrink-0 space-x-3">
               <a 
@@ -2893,38 +2940,35 @@ export default function WordPuzzleGame() {
                   onClick={handleHint}
                   disabled={!roundStarted || gameOver || isTransitioning}
                   className={`flex-shrink-0 w-12 h-8 rounded-lg relative flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed overflow-visible border-0 ${
-                    hintTargetWord && hintCharsRevealed >= hintTargetWord.length
+                    hintWord
                       ? 'text-white'
                       : hintAvailable
                         ? 'text-white hover:opacity-90'
                         : 'bg-white text-gray-400'
                   }`}
                   style={
-                    hintTargetWord && hintCharsRevealed >= hintTargetWord.length
+                    hintWord
                       ? { backgroundColor: 'rgba(28, 109, 42, 0.4)' }
                       : hintAvailable
                         ? { backgroundColor: '#1c6d2a' }
                         : undefined
                   }
                   title={
-                    hintTargetWord && hintCharsRevealed >= hintTargetWord.length
-                      ? 'Hint fully used'
+                    hintWord
+                      ? 'Hint already used'
                       : hintAvailable
                         ? 'Hint'
                         : 'Hint available in 30 seconds'
                   }
                   aria-label={
-                    hintTargetWord && hintCharsRevealed >= hintTargetWord.length
-                      ? 'Hint fully used'
+                    hintWord
+                      ? 'Hint already used'
                       : hintAvailable
                         ? 'Hint'
                         : 'Hint loading'
                   }
                 >
-                  {!(
-                    hintTargetWord &&
-                    hintCharsRevealed >= hintTargetWord.length
-                  ) &&
+                  {!hintWord &&
                     !hintAvailable && (
                     <svg
                       className="absolute inset-0 w-full h-full pointer-events-none rounded-lg"
@@ -2949,6 +2993,26 @@ export default function WordPuzzleGame() {
                     Hint
                   </span>
                 </button>
+              </div>
+              {/* Mistakes Remaining — gray dots shrink away as wrong guesses are made; hitting 0 ends the game.
+                  All MISTAKES_PER_LEVEL slots always render (used ones invisible) so nothing re-centers. */}
+              <div className="flex justify-center items-center gap-2 mt-2">
+                <span className="text-base text-gray-400">Mistakes Remaining</span>
+                <span className="flex items-center gap-2">
+                  {Array.from({ length: MISTAKES_PER_LEVEL }).map((_, i) => {
+                    const isActive = i < mistakesRemaining;
+                    const isAnimating = i === mistakeAnimIndex;
+                    return (
+                      <span
+                        key={i}
+                        aria-hidden
+                        className={`inline-block w-3 h-3 rounded-full bg-gray-400 ${
+                          isAnimating ? 'mistake-dot-out' : isActive ? '' : 'opacity-0'
+                        }`}
+                      />
+                    );
+                  })}
+                </span>
               </div>
               {/* Error message container — fixed min height (matches ver2) so Submit stays aligned when errors toggle */}
               <div className="min-h-[1.5rem] flex items-center justify-center">
@@ -3967,6 +4031,14 @@ export default function WordPuzzleGame() {
         }
         .hint-ready-pop {
           animation: hintReadyPop 0.2s ease-out;
+        }
+        @keyframes mistakeDotOut {
+          0% { transform: scale(1); opacity: 1; }
+          33% { transform: scale(1.5); opacity: 1; }
+          100% { transform: scale(0); opacity: 0; }
+        }
+        .mistake-dot-out {
+          animation: mistakeDotOut 0.3s ease-in-out forwards;
         }
       `}</style>
       
