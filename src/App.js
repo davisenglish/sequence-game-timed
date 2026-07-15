@@ -1385,7 +1385,8 @@ export default function WordPuzzleGame() {
   useEffect(() => {
     if (!roundStarted || gameOver) return;
     if (!isPageVisible) return;
-    if (showRules && !rulesDismissedOnceRef.current) return;
+    // Pause the timer whenever the rules modal is open (including re-opens mid-game).
+    if (showRules) return;
 
     const now = performance.now();
     gameLastTickTimestampRef.current = now;
