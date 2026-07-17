@@ -183,25 +183,87 @@ function isLocalYmdImmediatelyBefore(prevYmd, nextYmd) {
   return (n.getTime() - p.getTime()) / 86400000 === 1;
 }
 
-/** Last win was today or yesterday — streak can still be extended today. */
-function isTimedStreakCalendarActive(lastWinPuzzleDate, todayStr) {
-  if (!lastWinPuzzleDate) return false;
-  if (lastWinPuzzleDate === todayStr) return true;
-  return isLocalYmdImmediatelyBefore(lastWinPuzzleDate, todayStr);
+/** Sorted, de-duplicated list of valid YYYY-MM-DD strings. */
+function sortedUniqueYmd(arr) {
+  return [...new Set((arr || []).filter((d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)))].sort();
+}
+
+/** Longest run of consecutive calendar days within a sorted, unique date list. */
+function longestConsecutiveRun(sortedDates) {
+  if (!sortedDates || sortedDates.length === 0) return 0;
+  let best = 1;
+  let run = 1;
+  for (let i = 1; i < sortedDates.length; i++) {
+    if (isLocalYmdImmediatelyBefore(sortedDates[i - 1], sortedDates[i])) run += 1;
+    else run = 1;
+    if (run > best) best = run;
+  }
+  return best;
+}
+
+/**
+ * Active streak = consecutive wins ending at the most recent win. It only counts
+ * if that win is today or yesterday (no missed day), and today wasn't already lost.
+ */
+function currentRunFromWinDates(sortedDates, todayStr, lastLossDate) {
+  if (!sortedDates || sortedDates.length === 0) return 0;
+  if (lastLossDate && lastLossDate === todayStr) return 0;
+  const last = sortedDates[sortedDates.length - 1];
+  if (last !== todayStr && !isLocalYmdImmediatelyBefore(last, todayStr)) return 0;
+  let run = 1;
+  for (let i = sortedDates.length - 1; i > 0; i--) {
+    if (isLocalYmdImmediatelyBefore(sortedDates[i - 1], sortedDates[i])) run += 1;
+    else break;
+  }
+  return run;
+}
+
+/** Rebuild the `count` consecutive dates ending at `endYmd` — seeds the ledger from legacy saves. */
+function seedWinDatesFromStreak(endYmd, count) {
+  if (!endYmd || !count || count < 1) return [];
+  const [y, m, d] = endYmd.split('-').map(Number);
+  const out = [];
+  for (let i = count - 1; i >= 0; i--) {
+    out.push(getLocalDateString(new Date(y, m - 1, d - i)));
+  }
+  return out;
+}
+
+/**
+ * The win-date ledger (`winDates`) is the source of truth for streaks. This derives
+ * currentStreak/maxStreak from it, seeding from legacy fields the first time so existing
+ * streaks are preserved. maxStreak keeps any previously stored value as a floor.
+ */
+function recomputeStreakFields(s) {
+  let winDates = sortedUniqueYmd(s.winDates);
+  if (winDates.length === 0 && s.lastWinPuzzleDate && (s.currentStreak || 0) > 0) {
+    winDates = seedWinDatesFromStreak(s.lastWinPuzzleDate, s.currentStreak || 0);
+  }
+  s.winDates = winDates;
+  const today = getLocalDateString();
+  s.currentStreak = currentRunFromWinDates(winDates, today, s.lastLossDate || null);
+  s.maxStreak = Math.max(Number(s.maxStreak) || 0, longestConsecutiveRun(winDates));
+  s.lastWinPuzzleDate = winDates.length ? winDates[winDates.length - 1] : (s.lastWinPuzzleDate || null);
+  return s;
+}
+
+/** Record a win on `puzzleDateStr` in the ledger and recompute streaks. */
+function recordWinDate(s, puzzleDateStr) {
+  s.winDates = sortedUniqueYmd([...(s.winDates || []), puzzleDateStr]);
+  if (s.lastLossDate === puzzleDateStr) s.lastLossDate = null;
+  return recomputeStreakFields(s);
+}
+
+/** Record a loss on `puzzleDateStr` (breaks the active streak) and recompute. */
+function recordLossDate(s, puzzleDateStr) {
+  s.lastLossDate = puzzleDateStr;
+  return recomputeStreakFields(s);
 }
 
 /** If the player missed any calendar day after their last win, current streak is no longer active. */
 function normalizeTimedStatsStreak(raw) {
   const s = { ...raw };
-  const last = s.lastWinPuzzleDate;
-  if (!last) {
-    // Pre-calendar-streak saves: streak can't be verified; don't show a misleading number.
-    if ((s.currentStreak || 0) > 0) s.currentStreak = 0;
-    return s;
-  }
-  if (isTimedStreakCalendarActive(last, getLocalDateString())) return s;
-  s.currentStreak = 0;
-  return s;
+  return recomputeStreakFields(s);
 }
 
 function hashStringToInt(str) {
@@ -1194,10 +1256,12 @@ export default function WordPuzzleGame() {
     gamesWon: 0,
     currentStreak: 0,
     maxStreak: 0,
+    winDates: [], // Ledger of YYYY-MM-DD dates won; streaks are derived from this
+    lastWinPuzzleDate: null,
+    lastLossDate: null,
     fastestTimes: [],
     averageTimes: [],
     winTimes: [],
-    lastWinPuzzleDate: null,
     timeDistribution: [0, 0, 0, 0, 0]
   });
   const [showRules, setShowRules] = useState(false);
@@ -1537,7 +1601,8 @@ export default function WordPuzzleGame() {
       setStats((prev) => {
         let n = normalizeStatsTimeDistribution(normalizeFastestTimes(normalizeTimedStatsStreak({ ...prev })));
         if (roundStartedRef.current && !gameOverRef.current) {
-          n = { ...n, currentStreak: 0 };
+          // Left a game unfinished across the day boundary → that day counts as a miss.
+          n = recordLossDate({ ...n }, prevDay);
         }
         try {
           localStorage.setItem('sequenceGameTimedStats', JSON.stringify(n));
@@ -2150,7 +2215,7 @@ export default function WordPuzzleGame() {
 
   const resetGame = () => {
     if (roundStarted && !gameOver) {
-      const newStats = { ...stats, currentStreak: 0 };
+      const newStats = recordLossDate({ ...stats }, getLocalDateString());
       setStats(newStats);
       try {
         localStorage.setItem('sequenceGameTimedStats', JSON.stringify(newStats));
@@ -2229,23 +2294,9 @@ export default function WordPuzzleGame() {
     }
 
     if (isFullWin) {
-      const today = getLocalDateString();
-      const prevLast = newStats.lastWinPuzzleDate || null;
-      let nextStreak;
-      if (prevLast === today) {
-        nextStreak = newStats.currentStreak || 0;
-      } else if (prevLast && isLocalYmdImmediatelyBefore(prevLast, today)) {
-        nextStreak = (newStats.currentStreak || 0) + 1;
-      } else {
-        nextStreak = 1;
-      }
-      newStats.currentStreak = nextStreak;
-      newStats.lastWinPuzzleDate = today;
-      if (newStats.currentStreak > newStats.maxStreak) {
-        newStats.maxStreak = newStats.currentStreak;
-      }
+      recordWinDate(newStats, getLocalDateString());
     } else {
-      newStats.currentStreak = 0;
+      recordLossDate(newStats, getLocalDateString());
     }
 
     if (isFullWin && timeForThisRound > 0) {
@@ -2443,10 +2494,12 @@ export default function WordPuzzleGame() {
       gamesWon: 0,
       currentStreak: 0,
       maxStreak: 0,
+      winDates: [],
+      lastWinPuzzleDate: null,
+      lastLossDate: null,
       fastestTimes: [],
       averageTimes: [],
       winTimes: [],
-      lastWinPuzzleDate: null,
       timeDistribution: [0, 0, 0, 0, 0]
     });
   };
