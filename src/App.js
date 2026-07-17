@@ -254,11 +254,11 @@ function sortAnswersDeterministic(answers, seedKey) {
   });
 }
 
-/** Display #1 = March 22, 2026 local; #2 = Mar 23 local, … */
+/** Display #1 = July 15, 2026 local; #2 = July 16, 2026 local, … */
 function getLocalStringlishNumber() {
   const now = new Date();
   const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const epochLocal = new Date(2026, 2, 22);
+  const epochLocal = new Date(2026, 6, 15);
   const dayIndex = Math.floor((todayLocal.getTime() - epochLocal.getTime()) / 86400000);
   return Math.max(1, dayIndex + 1);
 }
@@ -1142,7 +1142,7 @@ function FloatingEmojis({ emojis, onDone }) {
         }
       `}</style>
       <div
-        style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 999999, overflow: 'hidden' }}
+        style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 999999 }}
         aria-hidden="true"
       >
         {particles.map(({ id, emoji, left, delay, size }) => (
