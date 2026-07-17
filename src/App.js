@@ -1357,8 +1357,10 @@ export default function WordPuzzleGame() {
           handleBeholdYourWork();
           return;
         }
-        window.location.replace('/');
-        return;
+        if (process.env.NODE_ENV !== 'development') {
+          window.location.replace('/');
+          return;
+        }
       }
 
       // 3) Explicit play intent from the hub → begin now, skipping the landing.
@@ -1370,8 +1372,16 @@ export default function WordPuzzleGame() {
         return;
       }
 
-      // 4) Reached the game without going through stringlish.com → send them there.
-      window.location.replace('/');
+      // 4) In production, redirect to the hub if reached without going through it.
+      // In development, load the daily triplets and show the landing screen so the
+      // game is testable locally (npm start) without the hub running.
+      if (process.env.NODE_ENV !== 'development') {
+        window.location.replace('/');
+        return;
+      }
+      const allLetters = await getDailyTripletsForDay(puzzleDay);
+      setAllLevelLetters(allLetters);
+      setLetters(allLetters[0]);
     })();
     const savedStats = localStorage.getItem('sequenceGameTimedStats');
     if (savedStats) {
@@ -1567,7 +1577,9 @@ export default function WordPuzzleGame() {
       setAllLevelLetters(triplets);
       setLetters(triplets[0]);
       // New day: route back through the hub rather than showing a landing screen.
-      window.location.replace('/');
+      if (process.env.NODE_ENV !== 'development') {
+        window.location.replace('/');
+      }
     };
     const id = setInterval(handleLocalDayTick, 60000);
     const onVis = () => {
@@ -2509,10 +2521,9 @@ export default function WordPuzzleGame() {
   const mobileGameplayKeyboardPadding =
     isMobile && roundStarted && !gameOver && !showRules;
 
-  // Landing screen is deprecated — stringlish.com is the entry hub. While not in an
-  // active or finished round, render nothing; the mount effect routes the user into
-  // begin / resume / results, or back to the hub.
-  if (!roundStarted && !gameOver) {
+  // In production the hub handles all entry points, so suppress the in-app landing
+  // screen. In development (npm start) show it so the game is testable locally.
+  if (!roundStarted && !gameOver && process.env.NODE_ENV !== 'development') {
     return <div className="w-full min-h-[100dvh]" />;
   }
 
@@ -2562,7 +2573,12 @@ export default function WordPuzzleGame() {
             </a>
             <h1 className="text-3xl font-bold">Stringlish</h1>
             <p className="text-lg font-medium text-gray-600 mt-1 flex items-center justify-center gap-2">
-              <span className="select-none" aria-hidden>⏰</span>
+              <img
+                src={process.env.PUBLIC_URL + "/alarmclock-filled.svg"}
+                alt=""
+                aria-hidden="true"
+                className="w-5 h-5 shrink-0"
+              />
               <span>Timed</span>
             </p>
           </>
