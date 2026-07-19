@@ -3921,17 +3921,16 @@ export default function WordPuzzleGame() {
                 type="button"
                 onClick={async () => {
                   const d = new Date();
-                  const mm = String(d.getMonth() + 1).padStart(2, '0');
-                  const dd = String(d.getDate()).padStart(2, '0');
-                  const yy = String(d.getFullYear()).slice(-2);
-                  const dateStr = `${mm}/${dd}/${yy}`;
+                  const monthName = d.toLocaleDateString('en-US', { month: 'long' });
+                  const dayNum = d.getDate();
+                  const year = d.getFullYear();
                   const completed = levelResults.length === 3 && levelResults.every(r => !r.gaveUp);
                   const lastRoundTime = finalGameTimeRef.current != null
                     ? finalGameTimeRef.current
                     : parseInt(localStorage.getItem('currentRoundTimeTimed') || '0', 10);
                   const text = completed && lastRoundTime > 0
-                    ? `Stringlish | Timed ⏰, ${dateStr} - Time: ${formatTime(lastRoundTime)}. See if you can beat me at https://www.stringlish.com/`
-                    : `Stringlish | Timed ⏰, ${dateStr} - Didn't quite get it this time. See if you can beat me at https://www.stringlish.com/`;
+                    ? `Stringlish ⏰ Timed\nTime: ${formatTime(lastRoundTime)}\n${monthName} ${dayNum}, ${year}\nSee if you can beat me at:\nhttps://stringlish.com/`
+                    : `Stringlish ⏰ Timed\nI tried my best...\n${monthName} ${dayNum}, ${year}\nSee if you can get it at:\nhttps://stringlish.com/`;
                   if (typeof navigator.share === 'function') {
                     try {
                       await navigator.share({ text });
